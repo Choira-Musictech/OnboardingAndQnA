@@ -2,6 +2,7 @@ import { badRequestError, appError } from '../../../shared/errors.js';
 import { spotifyService } from './spotify.service.js';
 import { spotifyRepository } from '../repositories/spotify.repository.js';
 import { normalizeName } from '../../../utils/name.js';
+import { registrationService } from '../../registration/services/registration.service.js';
 
 // `actualName` and `stageName` are provided by the request payload; no hardcoded defaults.
 
@@ -32,7 +33,7 @@ function parseReleaseYear(releaseDate) {
   return BigInt(match[1]);
 }
 
-function buildWorkRegistrationData(track, user) {
+function buildWorkRegistrationData(track, user, accountName) {
   return {
     AccountId: user?.id ? BigInt(user.id) : null,
     SongName: safeString(track.name),
@@ -46,8 +47,8 @@ function buildWorkRegistrationData(track, user) {
     DigitalLink: safeString(track.external_urls?.spotify),
     DocLink: null,
     ReleaseYear: parseReleaseYear(track.album?.release_date),
-    CreatedBy: null,
-    ModifedBy: null,
+    CreatedBy: accountName,
+    ModifedBy: accountName,
   };
 }
 
@@ -108,9 +109,21 @@ export async function matchSpotifyClaim(reference, user, actualName, stageName) 
   // could be filled with songs that aren't the caller's while the response said status:false.
   let workRegistration = null;
   if (matchResult.status === true) {
+    // The account's own confirmed name, not actualName/stageName - those are the name being
+    // searched for in the credits, not necessarily who this account belongs to. Best-effort: this
+    // route doesn't otherwise touch the DB, so a lookup failure (unknown/test account id) should
+    // never block saving the actual claim - same "don't let a side lookup fail the main write"
+    // reasoning as registration.service.js's BookId resolution.
+    let accountName = null;
+    try {
+      accountName = user?.id ? (await registrationService.getIdentityNames(String(user.id))).accountName : null;
+    } catch {
+      accountName = null;
+    }
+
     try {
       workRegistration = await spotifyRepository.createWorkRegistration(
-        buildWorkRegistrationData(track, user),
+        buildWorkRegistrationData(track, user, accountName),
       );
     } catch (err) {
       throw appError('Failed to save work registration', {
