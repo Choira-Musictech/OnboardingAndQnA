@@ -1026,10 +1026,18 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       verifyResult = await verifyValue(verifyStep.docType, message);
     } catch (err) {
       logger.warn({ userId, docType: verifyStep.docType, err }, 'Verification call failed');
-      // err.details.message is the verify service's OWN reason (e.g. "That is not a valid GSTIN
-      // format.") when it responded with success:false - a real network/timeout failure has no
-      // body to carry one, so describeVerifyError falls back to generic wording in that case.
-      const reason = typeof err.details?.message === 'string' ? err.details.message : null;
+      // Only a verdict about the NUMBER is worth repeating to the member, and the error's
+      // `code` is what says whose fault it was - not the mere presence of a message, which
+      // every refusal carries. A *_VERIFICATION_UNAVAILABLE means the registry could not be
+      // asked at all: the GST department's own backend answers "Backend Timed Out. Try
+      // Again." routinely, and that arrives here with a message, so telling the member to
+      // check a number that is very likely correct sent them round a loop they could not
+      // win. Anything that is not explicitly the number's fault gets the retry-safe wording.
+      const code = err.details?.code;
+      const blamesTheValue = typeof code === 'string' && code.endsWith('_MALFORMED');
+      const reason = blamesTheValue && typeof err.details?.message === 'string'
+        ? err.details.message
+        : null;
       return {
         sessionEnded: false,
         messages: [textMessage('verify-call-failed', describeVerifyError(verifyStep.label, reason))],
