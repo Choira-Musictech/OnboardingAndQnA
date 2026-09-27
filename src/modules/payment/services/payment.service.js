@@ -166,7 +166,7 @@ async function initiatePayment({ userId, productInfo, returnOrigin }) {
     PaidAmount: '0',
     PaymentDate: new Date(),
     CreateDate: new Date(),
-    CreatedBy: 'ADMINISTRATOR',
+    CreatedBy: customerName,
     ModifedBy: customerName || null,
     ModifedDate: new Date(),
   });
