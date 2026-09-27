@@ -410,8 +410,15 @@ async function saveConversationField(userId, registrationId, field, value) {
   // BookId depends on AccountRegType and the permanent address's Pincode, answerable in either
   // order by the flow - re-resolve after whichever one just landed (AccountAddress_PR is the
   // current/communication address, not the permanent one dbo.GetStateBookId's query reads).
+  // This is a best-effort follow-up, not part of saving the answer itself - a failure here (e.g.
+  // dbo.GetStateBookId missing on a deployed DB - confirmed live) must never fail the chat answer
+  // that was just saved above.
   if (field === 'AccountRegType' || field === 'AccountAddress') {
-    await resolveAndPersistBookId(registrationId);
+    try {
+      await resolveAndPersistBookId(registrationId);
+    } catch (err) {
+      logger.warn({ registrationId, err }, 'Could not resolve BookId, continuing without it');
+    }
   }
 }
 
@@ -660,8 +667,15 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
       // Most members fill the permanent address via a document upload (this branch), not the
       // manual-typed chat question - BookId's resolution has to fire from here too, not just
       // saveConversationField's AccountAddress branch, or it silently never runs for them.
+      // Best-effort, same as that call site: a BookId failure (e.g. dbo.GetStateBookId missing on a
+      // deployed DB - confirmed live) is not a document-verification failure and must never be
+      // reported to the member as one, nor block the address that was already saved above.
       if (addressColumn === 'AccountAddress') {
-        await resolveAndPersistBookId(registrationId);
+        try {
+          await resolveAndPersistBookId(registrationId);
+        } catch (err) {
+          logger.warn({ registrationId, err }, 'Could not resolve BookId, continuing without it');
+        }
       }
     }
 
