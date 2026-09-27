@@ -661,7 +661,17 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
       // manual-typed chat question - BookId's resolution has to fire from here too, not just
       // saveConversationField's AccountAddress branch, or it silently never runs for them.
       if (addressColumn === 'AccountAddress') {
-        await resolveAndPersistBookId(registrationId);
+        try {
+          await resolveAndPersistBookId(registrationId);
+        } catch (bookIdErr) {
+          // Logged at error level, not warn: a member whose BookId never resolved is a
+          // record someone has to finish by hand, so this needs to be findable. It is
+          // still not a reason to reject a document that read correctly.
+          logger.error(
+            { registrationId, docType, err: bookIdErr },
+            'BookId resolution failed, document kept and address saved',
+          );
+        }
       }
     }
 
@@ -695,7 +705,7 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     );
     // Surfaces the OCR service's own message (e.g. a wrong-document-type or low-confidence reason)
     // up to the user-facing failure text in registrationEngine.js, instead of only a generic one.
-    return { verified: false, extracted: null, failureReason: err.message || null };
+    return { verified: false, extracted: null, failureReason: err.errorCode ? err.message || null : null };
   }
 }
 
