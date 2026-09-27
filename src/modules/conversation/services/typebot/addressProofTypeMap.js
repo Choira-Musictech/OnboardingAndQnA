@@ -17,9 +17,10 @@ export const ADDRESS_PROOF_TYPE_VARIABLE_IDS = {
   vgbmeklrpc3b4hu8tvmodnt4e: 'current', // address_proof_type_current
 };
 
-// 4 of the 5 address-proof choices have a live OCR endpoint (per the "Document Verification API").
-// "Letter from Property Owner" has none anywhere (not a government/utility document) and maps to
-// null - no OCR, saved as-is (same treatment as NOC).
+// 5 of the address-proof choices have a live OCR endpoint (per the "Document Verification API").
+// "Letter from Property Owner"/"Telephone Bill"/"Mobile Bill"/"Rent Agreement" have none anywhere
+// (not government/utility documents with an OCR endpoint) and map to null - no OCR, saved as-is
+// (same treatment as NOC).
 const OCR_TYPE_BY_ANSWER = {
   'driving licence': 'DRIVING_LICENCE',
   'voter id': 'VOTER_ID',
@@ -27,6 +28,9 @@ const OCR_TYPE_BY_ANSWER = {
   // Live button text is "Electricity/Light Bill" (confirmed via the builder API), not
   // "Electricity Bill" - a stale guess here silently skipped OCR for every real selection.
   'electricity/light bill': 'ELECTRICITY',
+  // Live button text confirmed via the builder API on the company/NRI paths' address-proof
+  // choice blocks (kg2i35l2491u5hopas7stdg4 and friends) - "GST Certificate" verbatim.
+  'gst certificate': 'GST',
 };
 
 export function isAddressProofTypeStep(variableId) {

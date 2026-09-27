@@ -93,7 +93,7 @@ const FIELD_CONFIG = {
 };
 
 const PROMPTS = {
-  Film_AlbumName: (name) => `What film or album is "${name}" from? If it's a single with no film or album, just say "Single".`,
+  Film_AlbumName: (name) => `Is "${name}" from a film or an album? Type its name - or type "Single" if it's a stand-alone release.`,
   Publisher: (name) => `Who is the publisher or label for "${name}"?`,
   WorkCategory: (name) => `What type of work is "${name}"?`,
   LanguageNames: (name) => `What language(s) is "${name}" in?`,

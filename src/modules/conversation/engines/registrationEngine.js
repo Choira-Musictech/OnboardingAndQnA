@@ -116,6 +116,8 @@ export const OCR_FIELD_LABELS = {
   // Same caveat as PAN/DRIVING_LICENCE above - collection only documents "Bill name + address" for
   // ELECTRICITY, not yet confirmed against a real success response.
   ELECTRICITY: { name: 'Name', address: 'Address' },
+  // Confirmed live against a real GST certificate - see registration.service.js's normalizeExtracted.
+  GST: { name: 'Legal Name', gstin: 'GSTIN', address: 'Address', pincode: 'Pincode' },
 };
 
 // Upload slots whose document type isn't known from the upload block itself - it was recorded a
@@ -1343,20 +1345,7 @@ async function handleUploadCore({ userId, token, file }) {
 
   let result = null;
   if (docType) {
-    try {
-      result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
-    } catch (err) {
-      if (err.errorCode === 'IDENTITY_NAME_MISMATCH') {
-        logger.warn({ userId, docType }, 'Identity document name mismatch - re-asking for the same document');
-        return {
-          sessionEnded: false,
-          messages: [textMessage('identity-name-mismatch', err.message)],
-          input: session.input,
-          progress: resolveProgress(session.input.id),
-        };
-      }
-      throw err;
-    }
+    result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
   }
 
   // OCR was attempted (result carries an `extracted` key, even if null) -

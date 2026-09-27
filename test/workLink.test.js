@@ -102,7 +102,7 @@ test('the song card shows role-labelled credits when the service supplied them',
 test('the credits prompt invites several names at once', () => {
   const message = describeCredits({ artists: ['Pritam', 'Arijit Singh'] });
   assert.match(message, /Pritam, Arijit Singh/);
-  assert.match(message, /separated by commas/i);
+  assert.match(message, /separate multiple names with commas/i);
 
   // Every credited name is listed, not just the performers - a member credited only as the
   // lyricist has to be able to see themselves in that list.
@@ -114,7 +114,7 @@ test('the credits prompt invites several names at once', () => {
   // Falls back to the channel name when the title could not be parsed into artists.
   assert.match(describeCredits({ artists: [], channelName: 'T-Series' }), /T-Series/);
   // And says something sensible with neither.
-  assert.match(describeCredits({ artists: [] }), /couldn't find your name/i);
+  assert.match(describeCredits({ artists: [] }), /not listed in this song's credits/i);
 });
 
 test('the alias loop is bounded - nobody may get stuck on this step', () => {

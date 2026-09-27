@@ -130,7 +130,7 @@ for (const docType of ['AADHAAR', 'PAN']) {
 
 test('with OCR_NAME_VERIFICATION_ENABLED off, no NAME_VERIFIED_DOC_TYPES sends a name field at all', async (t) => {
   // env is frozen at process start (config/env.js) - can't be monkey-patched here, same limitation
-  // as OCR_ENABLED/IDENTITY_NAME_CHECK_ENABLED elsewhere. This self-skips unless .env has the flag
+  // as OCR_ENABLED/GST_VERIFY_ENABLED elsewhere. This self-skips unless .env has the flag
   // off locally, mirroring the pattern those tests use for their own kill-switches.
   if (env.OCR_NAME_VERIFICATION_ENABLED) return t.skip('OCR_NAME_VERIFICATION_ENABLED is true locally');
 
