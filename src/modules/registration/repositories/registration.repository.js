@@ -35,7 +35,7 @@ function update(accountId, data) {
 // AGENTS.md. App_Accounts_Doc has no unique constraint on (AccountId, DocumentName), so a
 // re-upload is handled as a manual find-then-update-or-create rather than a native
 // Prisma upsert (which requires a unique/id field to match on).
-async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, docFileName = null, documentLookupId = null }) {
+async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, docFileName = null, documentLookupId = null, createdBy = null }) {
   const existing = await prisma.appAccountsDoc.findFirst({
     where: { AccountId: BigInt(accountId), DocumentName: caption },
   });
@@ -54,6 +54,7 @@ async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, 
         DocFileName: docFileName,
         DocumentLookupId: documentLookupIdValue,
         ModifedDate: new Date(),
+        ...(createdBy ? { ModifedBy: createdBy } : {}),
       },
     });
   }
@@ -66,6 +67,7 @@ async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, 
       DocStatus: docStatus,
       DocFileName: docFileName,
       DocumentLookupId: documentLookupIdValue,
+      ...(createdBy ? { CreatedBy: createdBy, ModifedBy: createdBy } : {}),
     },
   });
 }

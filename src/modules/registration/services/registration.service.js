@@ -343,6 +343,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     docStatus,
     documentLookupId,
     docFileName: buildDocFileName(registrationId, documentLookupId, documentUrl),
+    createdBy: account?.AccountName?.trim() || null,
   });
 
   if (docType === DOC_TYPES.PROFILE_PHOTO) {
