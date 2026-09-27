@@ -70,14 +70,30 @@ test('a non-2xx response throws VERIFY_REQUEST_FAILED', async () => {
   );
 });
 
-test('a 2xx response with status:false (an invalid GSTIN) throws VERIFY_REQUEST_FAILED with the service\'s own message', async () => {
+test('a 2xx response with status:false (an invalid GSTIN) is a verdict, not a failure', async () => {
   // The exact real-world shape a live probe returned for an invalid GSTIN.
   mockFetch(async () => jsonResponse(200, { status: false, message: 'Invalid GSTIN', data: null }));
 
   const provider = createHttpVerifyProvider();
+  const result = await provider.verify({ docType: 'GSTIN', value: 'X' });
+
+  // Throwing here would put a registry that said "no" through the same path as
+  // a registry that could not be reached, and the member would be told we are
+  // having trouble rather than that the number is not registered.
+  assert.equal(result.verified, false);
+  assert.equal(result.message, 'Invalid GSTIN');
+});
+
+test('a 5xx with status:false still throws - the lookup did not happen', async () => {
+  mockFetch(async () => jsonResponse(502, {
+    status: false, message: 'Unable to verify GSTIN.', code: 'GSTIN_VERIFICATION_UNAVAILABLE',
+  }));
+
+  const provider = createHttpVerifyProvider();
   await assert.rejects(
     provider.verify({ docType: 'GSTIN', value: 'X' }),
-    (err) => err.errorCode === 'VERIFY_REQUEST_FAILED' && err.message === 'Invalid GSTIN',
+    (err) => err.errorCode === 'VERIFY_REQUEST_FAILED'
+      && err.details.code === 'GSTIN_VERIFICATION_UNAVAILABLE',
   );
 });
 
