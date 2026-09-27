@@ -104,17 +104,11 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v !== 'false'),
-  // Blanket kill-switch for the cross-document identity-name check (independent of OCR_ENABLED and
-  // GST_VERIFY_ENABLED) - flip to false to test the upload flow locally without getting blocked by
-  // mismatched dummy documents. Mirrors OCR_ENABLED's exact shape/reasoning.
-  IDENTITY_NAME_CHECK_ENABLED: z
-    .string()
-    .default('true')
-    .transform((v) => v !== 'false'),
-  // Blanket kill-switch for the `name` field sent to DRIVING_LICENCE/PASSPORT/VOTER_ID/BANK OCR
-  // calls (independent of OCR_ENABLED/IDENTITY_NAME_CHECK_ENABLED) - flip to false to stop the OCR
-  // service's own name-match check from blocking uploads (e.g. NAME_MISMATCH) without needing a
-  // document in the account holder's actual name on hand. Mirrors OCR_ENABLED's exact shape/reasoning.
+  // Blanket kill-switch for the `name` field sent to DRIVING_LICENCE/PASSPORT/VOTER_ID/BANK/GST OCR
+  // calls (independent of OCR_ENABLED) - flip to false to stop the OCR service's own name-match check
+  // from blocking uploads (e.g. NAME_MISMATCH) without needing a document in the account holder's
+  // actual name on hand. This app has no cross-document name check of its own - this is the only
+  // name-verification switch left. Mirrors OCR_ENABLED's exact shape/reasoning.
   OCR_NAME_VERIFICATION_ENABLED: z
     .string()
     .default('true')

@@ -85,6 +85,27 @@ test('a half-read passport does not invent a name', () => {
   assert.equal(neither.name, undefined, 'no name at all, rather than an empty string');
 });
 
+// --- GST field normalisation ------------------------------------------
+
+test('GST: real document-OCR shape - legalName is mapped onto the shared name field', () => {
+  // Confirmed live against the real POST /api/documents/gst endpoint (a real GST certificate).
+  const real = normalizeExtracted('GST', {
+    legalName: 'CHOIRA MUSICTECH PRIVATE LIMITED',
+    gstin: '27AAJCC8000E1ZZ',
+    gstinChecksumValid: true,
+    address: '21.Gruhalaxmi Society, Manavseva Nagar, Seminary Hills Nagpur, Nagpur, Maharashtra, 440013',
+    pincode: '440013',
+    zipCode: '440013',
+    isValid: true,
+  });
+  assert.equal(real.name, 'CHOIRA MUSICTECH PRIVATE LIMITED');
+  // Already-named-right fields pass through untouched.
+  assert.equal(real.gstin, '27AAJCC8000E1ZZ');
+  assert.equal(real.address, '21.Gruhalaxmi Society, Manavseva Nagar, Seminary Hills Nagpur, Nagpur, Maharashtra, 440013');
+  assert.equal(real.pincode, '440013');
+  assert.equal(real.isValid, true);
+});
+
 test('every other document is passed through untouched', () => {
   const aadhaar = { name: 'REAL NAME', dob: '01/01/1990' };
   assert.equal(normalizeExtracted('AADHAAR', aadhaar), aadhaar, 'same object, not a copy');

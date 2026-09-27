@@ -23,15 +23,21 @@ const DOC_TYPE_PATHS = {
   VOTER_ID: 'voter-id',
   ELECTRICITY: 'electricity',
   PASSPORT: 'passport',
+  GST: 'gst',
 };
 
-// Confirmed with the OCR team (not in the service's own Postman collection) - these 4 endpoints
-// accept an optional `name` field so the service can verify the document's name against it. BANK
-// covers both passbook and cheque - this app has a single BANK doc type/OCR endpoint for both.
-// Deliberately NOT every non-PAN type - AADHAAR/ELECTRICITY keep sending only { documentUrl },
-// user-confirmed scope. Gated by env.OCR_NAME_VERIFICATION_ENABLED (see config/env.js) - a
+// Confirmed with the OCR team (not in the service's own Postman collection) - DRIVING_LICENCE/
+// PASSPORT/VOTER_ID/BANK accept an optional `name` field so the service can verify the document's
+// name against it. GST was never documented for this but was live-probed this session and behaves
+// identically: sending `name` gets a real government-registry name check back, matching returns 201,
+// a mismatch returns 422 with code NAME_MISMATCH and the service's own message - exactly the same
+// contract, so it's included here too, and this app has no cross-document name check of its own
+// anymore (relies entirely on the OCR service for this). BANK covers both passbook and cheque - this
+// app has a single BANK doc type/OCR endpoint for both. Deliberately NOT every doc type -
+// AADHAAR/ELECTRICITY keep sending only { documentUrl }, user-confirmed scope. Gated by
+// env.OCR_NAME_VERIFICATION_ENABLED (see config/env.js) - a
 // blanket kill-switch, same shape as OCR_ENABLED, for when this check blocks testing.
-const NAME_VERIFIED_DOC_TYPES = new Set(['DRIVING_LICENCE', 'PASSPORT', 'VOTER_ID', 'BANK']);
+const NAME_VERIFIED_DOC_TYPES = new Set(['DRIVING_LICENCE', 'PASSPORT', 'VOTER_ID', 'BANK', 'GST']);
 
 export function createHttpOcrProvider() {
   // panHolderType: confirmed with the OCR team (not in the service's own Postman collection) - the
