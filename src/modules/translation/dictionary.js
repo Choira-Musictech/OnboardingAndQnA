@@ -62,6 +62,10 @@ const VARIABLE_PARTS = [
   // "completed about 11% of it" - the number changes with every member, but the
   // per-cent sign does not, so it stays in the phrase and only the digits move.
   /\d+(?=%)/g,
+  // "Documents you uploaded (3)" - the count is a variable, the heading is not.
+  // Exact entries are tried before templates, so "Communication address proof
+  // (2)", which is a fixed heading that happens to end in a digit, still wins.
+  /\d+(?=\))/g,
 ];
 
 function toTemplate(text) {
@@ -124,13 +128,42 @@ function bySentence(text, language) {
       break;
     }
     if (!taken) {
-      out.push(units[start].text, units[start].after);
+      const line = labelledLine(units[start].text, language)
+        ?? bulletLine(units[start].text, language);
+      if (line) {
+        out.push(line, units[start].after);
+        translatedAny = true;
+      } else {
+        out.push(units[start].text, units[start].after);
+      }
       taken = 1;
     }
     start += taken;
   }
 
   return translatedAny ? out.join('') : null;
+}
+
+/**
+ * "  Name: Nirnay Sawant" - the payment review and the resume summary are built
+ * as label/value lines. The label is our wording and translates; the value is
+ * the member's own data and must come back exactly as it went in. Only a label
+ * the dictionary already knows is replaced, so a line that merely contains a
+ * colon - a URL, a time - is left alone rather than guessed at.
+ */
+function labelledLine(text, language) {
+  const parts = /^(\s*)([^:]{1,60}):[ \t](.*)$/.exec(text);
+  if (!parts) return null;
+  const hit = wholeString(parts[2].trim(), language);
+  return hit ? `${parts[1]}${hit}: ${parts[3]}` : null;
+}
+
+/** "  - Electricity/Light Bill" - a bullet whose text is ours to translate. */
+function bulletLine(text, language) {
+  const parts = /^(\s*[-*\u2022]\s*)(.+)$/.exec(text);
+  if (!parts) return null;
+  const hit = wholeString(parts[2].trim(), language);
+  return hit ? `${parts[1]}${hit}` : null;
 }
 
 /** An exact entry, or one whose variable parts have been templated out. */
