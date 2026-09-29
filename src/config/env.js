@@ -104,7 +104,7 @@ const envSchema = z.object({
   // The language the Typebot flow itself is written in - never translated to.
   TRANSLATION_SOURCE_LANGUAGE: z.string().default('en'),
   // Must match the codes the frontend offers (src/constants/languages.js).
-  TRANSLATION_SUPPORTED_LANGUAGES: z.string().default('en,hi,mr,gu'),
+  TRANSLATION_SUPPORTED_LANGUAGES: z.string().default('en,hi,mr,gu,bn'),
   TRANSLATION_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   TRANSLATION_CACHE_MAX: z.coerce.number().int().positive().default(5000),
   // Defaults to GEMINI_MODEL when blank.
