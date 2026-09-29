@@ -83,6 +83,35 @@ const envSchema = z.object({
   GEMINI_MODEL: z.string().default('gemini-flash-lite-latest'),
   GEMINI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
+  /* Translation of the chatbot's own replies (modules/translation).
+   * The flow is authored once in English and translated on the way out, so a flow edit never
+   * needs a translated copy. Off by default: with TRANSLATION_ENABLED false - or the chosen
+   * provider unconfigured - every member simply gets the English text.
+   *
+   * TRANSLATION_PROVIDER 'google' is Cloud Translation, the product IPRS asked for. Google no
+   * longer accepts a plain API key on that API for every project (401 "API keys are not supported
+   * by this API"), so it takes GOOGLE_TRANSLATE_TOKEN, an OAuth/service-account access token,
+   * falling back to GOOGLE_TRANSLATE_API_KEY where keys are still permitted. 'gemini' reuses the
+   * generative endpoint this repo already calls, which does accept a plain API key. */
+  TRANSLATION_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  TRANSLATION_PROVIDER: z.enum(['dictionary', 'gemini', 'google']).default('dictionary'),
+  // JSON file of { "English phrase": { "hi": "...", "mr": "...", "gu": "..." } } used by
+  // the 'dictionary' provider. Written once for the flow's fixed wording.
+  TRANSLATION_DICTIONARY_PATH: z.string().optional(),
+  // The language the Typebot flow itself is written in - never translated to.
+  TRANSLATION_SOURCE_LANGUAGE: z.string().default('en'),
+  // Must match the codes the frontend offers (src/constants/languages.js).
+  TRANSLATION_SUPPORTED_LANGUAGES: z.string().default('en,hi,mr,gu'),
+  TRANSLATION_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  TRANSLATION_CACHE_MAX: z.coerce.number().int().positive().default(5000),
+  // Defaults to GEMINI_MODEL when blank.
+  TRANSLATION_GEMINI_MODEL: z.string().optional(),
+  GOOGLE_TRANSLATE_API_KEY: z.string().optional(),
+  GOOGLE_TRANSLATE_TOKEN: z.string().optional(),
+
   DEFAULT_REGISTRATION_STATUS: z.string().default('started'),
   REGISTRATION_TOTAL_STEPS: z.coerce.number().int().positive().default(10),
 
