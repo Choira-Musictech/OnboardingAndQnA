@@ -20,7 +20,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { prisma } from '../src/shared/prisma.js';
 import { registrationReviewService, renderSections } from '../src/modules/registration/services/registrationReview.service.js';
-import { describeReview, describeCorrection, confirmsReview, PAYMENT_REVIEW_INPUT } from '../src/modules/conversation/services/typebot/paymentGate.js';
+import { describeReview } from '../src/modules/conversation/services/typebot/paymentGate.js';
 
 // --- rendering (pure) ------------------------------------------------------
 
@@ -49,26 +49,6 @@ test('labelled lines render as "Label: value", unlabelled ones as bullets', () =
   assert.match(text, /- PAN card/);
   assert.match(text, /- Bank passbook \/ cheque/);
   assert.match(text, /before payment/i);
-});
-
-test('the review offers exactly two answers', () => {
-  const contents = PAYMENT_REVIEW_INPUT.items.map((i) => i.content);
-  assert.equal(contents.length, 2);
-  assert.equal(confirmsReview(contents[0]), true, 'the first item must read as confirmation');
-  assert.equal(confirmsReview(contents[1]), false, 'the second must not');
-});
-
-test('confirmation answers', () => {
-  for (const yes of ['Yes, everything is correct', 'yes', 'Y', 'confirm']) assert.equal(confirmsReview(yes), true, yes);
-  for (const no of ['Something needs correcting', 'no', '']) assert.equal(confirmsReview(no), false, no);
-});
-
-test('the correction reply quotes the registration number and still allows payment', () => {
-  const text = describeCorrection(12345);
-  assert.match(text, /12345/);
-  assert.match(text, /continue to payment/i);
-  // Typebot cannot be driven backwards, so we point at a human rather than pretend to offer an edit.
-  assert.ok(/write to \S+/.test(text) || /get in touch/.test(text), text);
 });
 
 // --- building the review ---------------------------------------------------
@@ -134,6 +114,19 @@ test('filled fields appear, under the section a member would look in', async (t)
   // Shown in full on purpose - masking the account number would hide the most expensive OCR error.
   assert.match(body, /Account number\|1234567890/);
   assert.match(body, /PAN\|ABCDE1234F/);
+});
+
+test('every alias shows under "Stage name" - there is no separate "Also credited as" section', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  // Position 0 is the flow's own stage-name answer, the rest are names claimed later via work-link
+  // matching (see registration.service.js's addAliases) - all of them belong under one field now.
+  const account = await makeAccount({ AccountName: 'Arijit Singh', AccountAlias: 'Arijit, A.R., Pritam' });
+
+  const sections = await registrationReviewService.buildReview(String(account.AccountId));
+  const body = flatten(sections);
+
+  assert.match(body, /Stage name\|Arijit, A\.R\., Pritam/);
+  assert.equal(sections.some((s) => s.title === 'Also credited as'), false, 'the section must be gone entirely');
 });
 
 test('empty fields and empty sections are dropped, not shown blank', async (t) => {

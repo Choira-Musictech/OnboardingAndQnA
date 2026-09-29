@@ -197,33 +197,21 @@ test('a normal question is not flagged as the payment step', async () => {
   assert.equal(res.isPaymentStep, false);
 });
 
-test('confirming the pre-payment review surfaces the real payment button flagged isPaymentStep', async () => {
-  // One of paymentGate.js's real, hardcoded PAYMENT_BLOCK_IDS - "Group #68, item 'payment'".
-  const PAYMENT_BLOCK = { id: 'mqd5zfukd99nkczylu206jo1', type: 'choice input', items: [{ id: 'x', content: 'payment' }] };
-  stubClient({ continueChat: () => { throw new Error('should not be called - the review-confirm branch is local'); } });
-  typebotSessionStore.set(USER, {
-    sessionId: 'live-session',
-    input: LIVE_INPUT,
-    pendingPaymentReview: { input: PAYMENT_BLOCK },
+test('reaching the payment step hands back the real payment button in the same turn - no confirmation step', async () => {
+  // One of paymentGate.js's real, hardcoded PAYMENT_BLOCK_IDS - "Group #68, item 'Pay Application Fee'".
+  const PAYMENT_BLOCK = { id: 'mqd5zfukd99nkczylu206jo1', type: 'choice input', items: [{ id: 'x', content: 'Pay Application Fee' }] };
+  stubClient({
+    continueChat: () => ({
+      messages: [{ id: 'm', type: 'text', content: { type: 'richText', richText: [{ type: 'p', children: [{ text: 'All done!' }] }] } }],
+      input: PAYMENT_BLOCK,
+    }),
   });
+  typebotSessionStore.set(USER, { sessionId: 'live-session', input: LIVE_INPUT });
 
-  const res = await handle({ userId: USER, token: 't', message: 'Yes, everything is correct' });
+  const res = await handle({ userId: USER, token: 't', message: 'hello' });
 
-  assert.equal(res.input.id, PAYMENT_BLOCK.id);
-  assert.equal(res.isPaymentStep, true, 'this is the frontend\'s cue to call POST /payment/initiate instead of relaying the answer');
-});
-
-test('rejecting the pre-payment review still flags the payment button it hands back', async () => {
-  const PAYMENT_BLOCK = { id: 'tjbgzghma2th8et9srotmzt5', type: 'choice input', items: [{ id: 'x', content: 'Pay' }] };
-  stubClient({ continueChat: () => { throw new Error('should not be called'); } });
-  typebotSessionStore.set(USER, {
-    sessionId: 'live-session',
-    input: LIVE_INPUT,
-    pendingPaymentReview: { input: PAYMENT_BLOCK },
-  });
-
-  const res = await handle({ userId: USER, token: 't', message: 'something is wrong' });
-
+  // No separate "Yes, everything is correct" turn needed - the real payment block comes back
+  // immediately, flagged for the frontend to call POST /payment/initiate.
   assert.equal(res.input.id, PAYMENT_BLOCK.id);
   assert.equal(res.isPaymentStep, true);
 });

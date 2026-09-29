@@ -85,8 +85,72 @@ test('a half-read passport does not invent a name', () => {
   assert.equal(neither.name, undefined, 'no name at all, rather than an empty string');
 });
 
+// --- GST field normalisation ------------------------------------------
+
+test('GST: real document-OCR shape - legalName is mapped onto the shared name field', () => {
+  // Confirmed live against the real POST /api/documents/gst endpoint (a real GST certificate).
+  const real = normalizeExtracted('GST', {
+    legalName: 'CHOIRA MUSICTECH PRIVATE LIMITED',
+    gstin: '27AAJCC8000E1ZZ',
+    gstinChecksumValid: true,
+    address: '21.Gruhalaxmi Society, Manavseva Nagar, Seminary Hills Nagpur, Nagpur, Maharashtra, 440013',
+    pincode: '440013',
+    zipCode: '440013',
+    isValid: true,
+  });
+  assert.equal(real.name, 'CHOIRA MUSICTECH PRIVATE LIMITED');
+  // Already-named-right fields pass through untouched.
+  assert.equal(real.gstin, '27AAJCC8000E1ZZ');
+  assert.equal(real.address, '21.Gruhalaxmi Society, Manavseva Nagar, Seminary Hills Nagpur, Nagpur, Maharashtra, 440013');
+  assert.equal(real.pincode, '440013');
+  assert.equal(real.isValid, true);
+});
+
 test('every other document is passed through untouched', () => {
-  const pan = { pan: 'ABCDE1234F', name: 'REAL NAME', dob: '01/01/1990' };
-  assert.equal(normalizeExtracted('PAN', pan), pan, 'same object, not a copy');
+  const aadhaar = { name: 'REAL NAME', dob: '01/01/1990' };
+  assert.equal(normalizeExtracted('AADHAAR', aadhaar), aadhaar, 'same object, not a copy');
   assert.equal(normalizeExtracted('PASSPORT', null), null);
+});
+
+test('PAN: real document-OCR shape - name is split for First/LastName, fatherName/motherName become parentName', () => {
+  // Confirmed live against the real POST /api/documents/pan endpoint (a real PAN card): the
+  // response is { pan, name, fatherName, dob, gender, ... } - no full_name_split field exists
+  // there, so name itself is what gets split.
+  const real = normalizeExtracted('PAN', {
+    pan: 'IIUPS8911N',
+    name: 'UDAY RAJKUMAR SINGH',
+    fatherName: 'RAJKUMAR SINGH',
+    dob: '22/02/1999',
+    isValid: true,
+  });
+  assert.equal(real.pan, 'IIUPS8911N');
+  assert.equal(real.name, 'UDAY RAJKUMAR SINGH');
+  assert.equal(real.firstName, 'UDAY RAJKUMAR', 'first two tokens of name');
+  assert.equal(real.lastName, 'SINGH', 'everything after the first two tokens');
+  assert.equal(real.parentName, 'RAJKUMAR SINGH');
+
+  // A card with only two name tokens - nothing left over for LastName.
+  const twoTokens = normalizeExtracted('PAN', { pan: 'X', name: 'PRIYAL LATHIA' });
+  assert.equal(twoTokens.firstName, 'PRIYAL LATHIA');
+  assert.equal(twoTokens.lastName, undefined, 'nothing left over, not an empty string');
+
+  // Mother's name instead of father's - either is written, per the member's own instruction.
+  const motherOnly = normalizeExtracted('PAN', { pan: 'X', name: 'A B', motherName: 'MOTHER NAME' });
+  assert.equal(motherOnly.parentName, 'MOTHER NAME');
+
+  // Both present - both get written, not just whichever comes first.
+  const both = normalizeExtracted('PAN', { pan: 'X', name: 'A B', fatherName: 'FATHER NAME', motherName: 'MOTHER NAME' });
+  assert.equal(both.parentName, 'FATHER NAME, MOTHER NAME');
+
+  // pan_number/full_name/full_name_split (a different, separate verification API's shape) still
+  // work if ever sent - defends against either shape.
+  const alt = normalizeExtracted('PAN', {
+    pan_number: 'BJFPL1282A',
+    full_name: 'PRIYAL HITEN LATHIA',
+    full_name_split: ['PRIYAL', 'HITEN', 'LATHIA'],
+  });
+  assert.equal(alt.pan, 'BJFPL1282A');
+  assert.equal(alt.name, 'PRIYAL HITEN LATHIA');
+  assert.equal(alt.firstName, 'PRIYAL HITEN');
+  assert.equal(alt.lastName, 'LATHIA');
 });

@@ -30,38 +30,11 @@ import { renderSections } from '../../../registration/services/registrationRevie
 
 export { isPaymentStep, PAYMENT_BLOCK_IDS } from './paymentBlockIds.js';
 
-// Synthetic block - not a Typebot block, Studio needs no changes (same pattern as
-// WORK_LINK_CONFIRM_INPUT and the OCR/email steps).
-export const PAYMENT_REVIEW_INPUT = {
-  id: 'payment-review',
-  type: 'choice input',
-  items: [
-    { id: 'payment-review-ok', content: 'Yes, everything is correct' },
-    { id: 'payment-review-fix', content: 'Something needs correcting' },
-  ],
-};
-
-export function confirmsReview(message) {
-  const answer = String(message ?? '').trim().toLowerCase();
-  return ['yes, everything is correct', 'yes', 'y', 'correct', 'confirm'].includes(answer);
-}
-
 // Rendering itself (a line with a label -> "Label: value", one without -> a plain bullet, which is
 // what lists of documents and songs want) lives in registrationReview.service.js's renderSections()
 // - the resume summary in registrationEngine.js wants the same body under a different intro line.
 export function describeReview(sections) {
   return `Please check your details before payment.\n\n${renderSections(sections)}`;
-}
-
-// Typebot can't be driven backwards, so we don't pretend the member can edit here - we tell them
-// who to write to, and quote the id support will ask for.
-export function describeCorrection(registrationId) {
-  const contact = env.SUPPORT_CONTACT?.trim();
-  const where = contact
-    ? `Please write to ${contact} and we'll correct it.`
-    : "Our team will get in touch with you to correct it.";
-
-  return `${where}\n\nQuote your registration number: ${registrationId}\n\nYou can continue to payment in the meantime.`;
 }
 
 // Shown when the member types something while parked on the payment button instead of going

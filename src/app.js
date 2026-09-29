@@ -19,6 +19,10 @@ import paymentRoutes from './modules/payment/routes/payment.routes.js';
 
 export const app = express();
 
+// Behind the cloudflared tunnel / any real reverse proxy, req.ip otherwise resolves to the proxy's
+// own address rather than the member's - needed for PublicIP capture at OTP verification.
+app.set('trust proxy', true);
+
 // --- Security ---
 app.use(helmet());
 app.use(

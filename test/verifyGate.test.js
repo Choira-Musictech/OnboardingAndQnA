@@ -37,7 +37,7 @@ test('the GST step recognises its own block, nothing else', () => {
 test('a failure message prefers the service\'s own reason, falls back when blank', () => {
   assert.equal(
     describeVerifyFailure('GST number', 'GSTIN not found'),
-    'GSTIN not found Please check it and enter it again.',
+    'GSTIN not found. Please check it and enter it again.',
   );
   assert.equal(
     describeVerifyFailure('TAN', ''),

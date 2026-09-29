@@ -127,10 +127,13 @@ function formatValue(column, value) {
   if (column === 'RollTypeIds') return describeRollTypeIds(value);
   if (column === 'EntityType') return describeEntityType(value);
 
-  // AccountAlias may hold several comma-separated names (see registration.service.js's addAliases).
-  // "Stage name" shows only the first (the flow's own answer) - the rest render separately, under
-  // "Also credited as" below, same as they always have.
-  if (column === 'AccountAlias') return registrationService.splitAliasList(value)[0] ?? null;
+  // AccountAlias may hold several comma-separated names (see registration.service.js's addAliases -
+  // position 0 is the flow's own stage-name answer, later positions are names claimed later via
+  // work-link matching). "Stage name" lists every one of them, not just the first.
+  if (column === 'AccountAlias') {
+    const aliases = registrationService.splitAliasList(value);
+    return aliases.length > 0 ? aliases.join(', ') : null;
+  }
 
   const text = String(value).trim();
   return text.length > 0 ? text : null;
@@ -150,10 +153,6 @@ async function buildReview(userId) {
     registrationRepository.findDocumentsByAccountId(userId),
     workRepository.findByAccountId(userId),
   ]);
-  // Position 0 is already shown as "Stage name" above (see formatValue) - this section is
-  // everything claimed after it, i.e. the work-link additions.
-  const [, ...alsoCreditedAs] = registrationService.splitAliasList(account.AccountAlias);
-
   const sections = SECTIONS.map(({ title, fields }) => ({
     title,
     lines: fields
@@ -174,15 +173,11 @@ async function buildReview(userId) {
       title: `Your songs (${works.length})`,
       lines: works.map((work) => ({
         label: null,
-        value: [work.SongName, work.Artist_Singers].filter(Boolean).join(' - ') || work.DigitalLink,
+        // A missing SongName (workLinkResolver.service.js should now always fill it for a resolvable
+        // YouTube/Spotify link, but a fetch failure or an older row can still leave it null) falls
+        // back to the link itself rather than silently reading as a bare list of names.
+        value: [work.SongName ?? work.DigitalLink, work.Artist_Singers].filter(Boolean).join(' - '),
       })),
-    });
-  }
-
-  if (alsoCreditedAs.length > 0) {
-    sections.push({
-      title: 'Also credited as',
-      lines: alsoCreditedAs.map((name) => ({ label: null, value: name })),
     });
   }
 

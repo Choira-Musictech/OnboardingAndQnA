@@ -1,18 +1,17 @@
 // ==================================================================
-// YouTube metadata via the public oEmbed endpoint.
+// YouTube metadata via the public oEmbed endpoint - the key-free path used by
+// resolveYoutubeFromTitle()'s title/channel fallback (see workLinkResolver.service.js). The
+// Google OAuth client id/secret on file cannot fetch video metadata by themselves - Google rejects
+// `grant_type=client_credentials` ("unsupported_grant_type") and the client id is not a valid API
+// key ("API_KEY_INVALID") - but a real YouTube Data API v3 key (env.YOUTUBE_API_KEY, optional) IS
+// now wired in, as a fallback description/publish-date source inside musicCredits.service.js's
+// fetchYoutubeCredits() - not here, since this file's own job stays the key-free path.
 //
-// WHY oEmbed AND NOT THE YouTube Data API: there is no API key for this
-// project. The Google OAuth client id/secret on file cannot fetch video
-// metadata - Google rejects `grant_type=client_credentials`
-// ("unsupported_grant_type") and the client id is not a valid API key
-// ("API_KEY_INVALID"). oEmbed needs no key at all, answers in ~0.4s, and
-// handles every URL form members paste (watch?v=, youtu.be, /shorts/,
-// music.youtube.com, and extra &list=/&index= params).
+// oEmbed needs no key at all, answers in ~0.4s, and handles every URL form members paste
+// (watch?v=, youtu.be, /shorts/, music.youtube.com, and extra &list=/&index= params).
 //
-// What it gives: the video title, the channel name (`author_name`) and a
-// thumbnail. What it does NOT give: publish date, description, tags or
-// category - so ReleaseYear stays null for YouTube links. Filling that in
-// would need a real YouTube Data API v3 key (see AGENTS.md).
+// What it gives: the video title, the channel name (`author_name`) and a thumbnail. What it does
+// NOT give: publish date, description, tags or category.
 // ==================================================================
 import { appError } from '../../../shared/errors.js';
 import { env } from '../../../config/env.js';

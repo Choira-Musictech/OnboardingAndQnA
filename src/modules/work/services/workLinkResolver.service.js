@@ -190,10 +190,22 @@ async function resolveYoutube(url) {
   // title path, which is also what runs when the service is disabled or down.
   if (!credits) return resolveYoutubeFromTitle(url);
 
+  // The credits service found role-labelled names but no line labelled "Song:" (verified live: a
+  // real "MAKHNA" video's description credits everyone but never names the song itself) - fall back
+  // to the video's own oEmbed title, exactly like resolveYoutubeFromTitle()'s fallback, rather than
+  // leaving SongName null. Only fetched when actually missing, so the common case (credits service
+  // also gave a song name) pays no extra latency.
+  let songName = credits.songName;
+  if (!songName) {
+    songName = await fetchYoutubeVideo(url)
+      .then((video) => video.title)
+      .catch(() => null);
+  }
+
   return {
     provider: PROVIDERS.YOUTUBE,
     url,
-    songName: credits.songName,
+    songName,
     artists: credits.artists,
     filmOrAlbum: credits.filmOrAlbum,
     // The InnerTube music header carries a publish date ("626M views - Nov 7, 2022"), which oEmbed

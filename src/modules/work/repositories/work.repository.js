@@ -30,6 +30,15 @@ function deleteByAccountId(accountId) {
   return prisma.appAccountsWorkRegistration.deleteMany({ where: { AccountId: BigInt(accountId) } });
 }
 
+// Used by the post-link-loop WorkCategory/LanguageNames/ReleaseYear follow-up (workDetailsGate.js) -
+// each answer is written to its own row as soon as it's given, not batched.
+function updateWorkRegistration(workNotificationId, data) {
+  return prisma.appAccountsWorkRegistration.update({
+    where: { WorkNotificationId: BigInt(workNotificationId) },
+    data,
+  });
+}
+
 // Duplicate-link check: DigitalLink already holds the provider's own canonical/normalized URL by
 // the time a row is written, so an exact match against it is a reliable "same song, same member".
 function existsByAccountIdAndDigitalLink(accountId, digitalLink) {
@@ -45,4 +54,5 @@ export const workRepository = {
   findByAccountId,
   deleteByAccountId,
   existsByAccountIdAndDigitalLink,
+  updateWorkRegistration,
 };

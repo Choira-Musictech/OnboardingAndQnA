@@ -5,6 +5,7 @@
 // Users are App_Accounts rows; AccountId is a bigint (stringified for JWT).
 // ==================================================================
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { badRequestError, unauthorizedError } from '../../../shared/errors.js';
 import { signAccessToken } from '../../../utils/token.js';
@@ -37,7 +38,7 @@ export function createAuthService({ otpProvider = createOtpProvider() } = {}) {
     return { message: 'OTP sent', ...(mockOtp ? { otp: mockOtp } : {}) };
   }
 
-  async function verifyOtp({ phone, otp }) {
+  async function verifyOtp({ phone, otp, ip, guid }) {
     const canonicalPhone = toCanonicalPhone(phone);
     const valid = await otpProvider.verify({ phone: canonicalPhone, otp });
     if (!valid) throw badRequestError('Invalid or expired OTP', { errorCode: 'INVALID_OTP' });
@@ -49,6 +50,16 @@ export function createAuthService({ otpProvider = createOtpProvider() } = {}) {
           AccountGroupId: 0,
           AccountMobile: canonicalPhone,
           AccountType: 'C',
+        });
+        // AccountId is only known once the insert returns, and the IP is only meaningful for the
+        // request that actually created this account (the race loser below just logs into an
+        // account someone else's request already stamped).
+        user = await userRepository.update(user.AccountId, {
+          AccountCode: `c-${user.AccountId}`,
+          PublicIP: ip || null,
+          // No frontend sends its own persisted browser id yet - fall back to a server-generated
+          // one so the column is never left empty, while still honouring a real one once sent.
+          GUID: guid || crypto.randomUUID(),
         });
       } catch (err) {
         // Two verify requests for the same new number can both miss the lookup above and race to

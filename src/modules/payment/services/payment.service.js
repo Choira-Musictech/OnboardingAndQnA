@@ -166,7 +166,7 @@ async function initiatePayment({ userId, productInfo, returnOrigin }) {
     PaidAmount: '0',
     PaymentDate: new Date(),
     CreateDate: new Date(),
-    CreatedBy: 'ADMINISTRATOR',
+    CreatedBy: customerName,
     ModifedBy: customerName || null,
     ModifedDate: new Date(),
   });
@@ -248,6 +248,7 @@ async function handlePayuCallback(payuPayload) {
     PaymentGatewayResponse: isSuccess ? 'Status=success' : `Status=failure--${(payuPayload.error_Message || payuPayload.unmappedstatus || 'Payment failed')}`.slice(0, 500),
     ResponseNo: payuPayload.mihpayid ? String(payuPayload.mihpayid) : null,
     ResponseString: responseString,
+    PaymentBankName: payuPayload.bankcode || null,
     PaidAmount: isSuccess ? String(payuPayload.amount ?? existing.PaymentAmount ?? '') : '0',
   });
 
@@ -324,6 +325,7 @@ async function verifyPaymentStatus({ userId, txnId }) {
       PaymentGatewayResponse: 'Status=success',
       ResponseNo: details.mihpayid ? String(details.mihpayid) : existing.ResponseNo,
       ResponseString: JSON.stringify(check.raw ?? {}),
+      PaymentBankName: details.bankcode || existing.PaymentBankName,
       PaidAmount: String(existing.PaymentAmount ?? ''),
     });
 

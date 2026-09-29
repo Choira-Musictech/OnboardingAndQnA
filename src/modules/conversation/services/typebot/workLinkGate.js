@@ -102,8 +102,8 @@ export function describeCredits(resolved) {
   // themselves in the list. Falls back to the performers, then the channel.
   const listed = resolved.credits?.length ? resolved.credits : resolved.artists;
   const credits = listed?.length ? listed.join(', ') : resolved.channelName;
-  const ask = 'What name (or names) are you credited under? You can enter several, separated by commas.';
+  const ask = 'What name are you credited under? (Enter separate multiple names with commas)';
   return credits
-    ? `We couldn't find your name in this song's credits. It lists: ${credits}.\n\n${ask}`
-    : `We couldn't find your name in this song's credits.\n\n${ask}`;
+    ? `You're not listed in this song's credits: ${credits}.\n\n${ask}`
+    : `You're not listed in this song's credits.\n\n${ask}`;
 }

@@ -29,17 +29,21 @@ import {
   WORK_LINK_ALIAS_INPUT,
   WORK_LINK_MORE_INPUT,
 } from '../services/typebot/workLinkGate.js';
+import {
+  buildWorkDetailsQueue,
+  inputForField,
+  parseForField,
+  describeWorkDetailsPrompt,
+  describeWorkDetailsRetry,
+} from '../services/typebot/workDetailsGate.js';
 import { workLinkService } from '../../work/services/workLink.service.js';
 import { resolveWorkLink } from '../../work/services/workLinkResolver.service.js';
-import { matchCredits, MATCH_TRUST } from '../../work/services/workMatch.service.js';
+import { matchCredits } from '../../work/services/workMatch.service.js';
 import {
   isPaymentStep,
-  confirmsReview,
   describeReview,
-  describeCorrection,
   describePaymentPending,
   describePaymentReceived,
-  PAYMENT_REVIEW_INPUT,
 } from '../services/typebot/paymentGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
 import { registrationReviewService, renderSections } from '../../registration/services/registrationReview.service.js';
@@ -112,6 +116,8 @@ export const OCR_FIELD_LABELS = {
   // Same caveat as PAN/DRIVING_LICENCE above - collection only documents "Bill name + address" for
   // ELECTRICITY, not yet confirmed against a real success response.
   ELECTRICITY: { name: 'Name', address: 'Address' },
+  // Confirmed live against a real GST certificate - see registration.service.js's normalizeExtracted.
+  GST: { name: 'Legal Name', gstin: 'GSTIN', address: 'Address', pincode: 'Pincode' },
 };
 
 // Upload slots whose document type isn't known from the upload block itself - it was recorded a
@@ -129,6 +135,17 @@ function isAffirmative(message) {
   const normalized = String(message ?? '').trim().toLowerCase();
   return ['yes, confirm', 'yes', 'y', 'confirm'].includes(normalized);
 }
+
+// "Is your current address the same as your permanent address?" - one per role path, confirmed via
+// the published flow's builder-API export. Its answer carries no Typebot variableId (nothing in
+// conversationFieldMap.js observes it), so it's detected by block id instead, the same technique
+// paymentGate.js uses for the payment button.
+const SAME_AS_ADDRESS_BLOCK_IDS = new Set([
+  'i8v9h0dszpnwphwwl2mxf6te',
+  'ddk7tlmjhkvt3zktskzt9i9e',
+  'ctpx2z89l8pqltt5ehahmq3a',
+  'cbmqojadjfm2jmbk9c17a59q',
+]);
 
 function textMessage(id, text) {
   return {
@@ -274,24 +291,81 @@ function askForAnotherLink(existing, text) {
   };
 }
 
-// Persist the confirmed song, then either offer another slot or fall through to Typebot.
-// Returns either a full reply (the member is under the cap and is offered another link) or
-// `{ advance, notice }` - the conversation should carry on to Typebot, and `notice` is what to tell
-// the member on the way past. The notice matters: at the cap this used to return nothing at all, so
-// the fifth link saved silently and a sixth was discarded silently, both while the other four each
-// got a "Saved - that's N of 5" line. Confirming a song and being told nothing reads as a bug.
-async function saveAndOfferAnother({ userId, existing, resolved, trust, note, memberNames = [] }) {
+// Called once the member declines another link (WORK_LINK_MORE_INPUT's "No, continue"). Before
+// handing the conversation back to Typebot, asks WorkCategory/LanguageNames/ReleaseYear for every
+// saved song still missing one of them - see workDetailsGate.js for why these can't come from the
+// credits services. `lastUrl` rides along in the pending state so it can still be replayed into
+// Typebot once every question is answered, exactly as the old direct-replay path did.
+// Returns null when nothing is missing (nothing to ask - the caller falls through to the replay
+// immediately), or a full reply asking the first question.
+async function startWorkDetailsFollowUp({ userId, existing, lastUrl }) {
+  let rows = [];
+  try {
+    rows = await workLinkService.getWorkLinks(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not load saved work links for the details follow-up, skipping it');
+    return null;
+  }
+
+  const queue = buildWorkDetailsQueue(rows);
+  if (queue.length === 0) return null;
+
+  typebotSessionStore.set(userId, {
+    sessionId: existing.sessionId,
+    input: existing.input,
+    pendingWorkDetails: { lastUrl, queue, index: 0 },
+  });
+
+  const task = queue[0];
+  return {
+    sessionEnded: false,
+    messages: [textMessage('work-details-ask', describeWorkDetailsPrompt(task))],
+    input: inputForField(task.field),
+    progress: resolveProgress(existing.input.id),
+  };
+}
+
+// Once nothing more is owed for the song that was just saved (it had nothing missing, or the member
+// just answered the last of its WorkCategory/LanguageNames/ReleaseYear questions), either offer
+// another link slot or - at the cap - tell the caller to advance to Typebot.
+// Returns either a full reply (under the cap: offered another link) or `{ advance, notice }` - the
+// conversation should carry on to Typebot, and `notice` is what to tell the member on the way past.
+function finishSaveOutcome({ userId, existing, atCap, lastUrl, saved }) {
+  if (!atCap) {
+    typebotSessionStore.set(userId, {
+      sessionId: existing.sessionId,
+      input: existing.input,
+      pendingWorkLinkChoice: { lastUrl },
+    });
+
+    return {
+      sessionEnded: false,
+      messages: [textMessage('work-link-saved', `${saved} Would you like to add another?`)],
+      input: WORK_LINK_MORE_INPUT,
+      progress: resolveProgress(existing.input.id),
+    };
+  }
+
+  return { advance: true, notice: `${saved} That's the maximum, so we'll move on.` };
+}
+
+// Persist the confirmed song, then ask its own WorkCategory/LanguageNames/ReleaseYear (whichever are
+// missing - see workDetailsGate.js) right away, before offering another slot or falling through to
+// Typebot - one song's questions feel like a natural continuation of "yes, that's my song", rather
+// than saving every song's questions for one batch at the very end.
+// Returns either a full reply (a details question, or - under the cap with nothing to ask - another
+// link offered) or `{ advance, notice }` - the conversation should carry on to Typebot, and `notice`
+// is what to tell the member on the way past. The notice matters: at the cap this used to return
+// nothing at all, so the fifth link saved silently and a sixth was discarded silently, both while the
+// other four each got a "Saved - that's N of 5" line. Confirming a song and being told nothing reads
+// as a bug.
+async function saveAndOfferAnother({ userId, existing, resolved, note }) {
   let count = null;
   let stored = null;
   try {
-    // Only a name that was on file beforehand counts as verified - see workMatch.service.js.
-    // memberNames decides whether Author_Composer/Author_Lyricist get filled - see workLink.service.js.
-    stored = await workLinkService.saveWorkLink({
-      userId,
-      resolved,
-      matched: trust === MATCH_TRUST.TRUSTED,
-      memberNames,
-    });
+    // CreatedBy/ModifedBy record the member's own name - see workLink.service.js.
+    const { accountName } = await registrationService.getIdentityNames(userId);
+    stored = await workLinkService.saveWorkLink({ userId, resolved, accountName });
     count = await workLinkService.countWorkLinks(userId);
   } catch (err) {
     if (err.errorCode === 'WORK_LINK_DUPLICATE') {
@@ -315,29 +389,32 @@ async function saveAndOfferAnother({ userId, existing, resolved, trust, note, me
 
   const saved = note ?? `Saved - that's ${count} of ${MAX_WORK_LINKS} links.`;
 
-  if (count < MAX_WORK_LINKS) {
+  // `stored` is null when saveWorkLink refused because the member was already at five before this
+  // link - they confirmed a song that was not kept, so there's no new row to ask details about.
+  if (!stored) {
+    return { advance: true, notice: `You've already added the maximum of ${MAX_WORK_LINKS} links, so this one wasn't saved.` };
+  }
+
+  const atCap = count >= MAX_WORK_LINKS;
+  const queue = buildWorkDetailsQueue([stored]);
+
+  if (queue.length > 0) {
     typebotSessionStore.set(userId, {
       sessionId: existing.sessionId,
       input: existing.input,
-      pendingWorkLinkChoice: { lastUrl: resolved.url },
+      pendingWorkRowDetails: { queue, index: 0, lastUrl: resolved.url, atCap, saved },
     });
 
+    const task = queue[0];
     return {
       sessionEnded: false,
-      messages: [textMessage('work-link-saved', `${saved} Would you like to add another?`)],
-      input: WORK_LINK_MORE_INPUT,
+      messages: [textMessage('work-details-ask', describeWorkDetailsPrompt(task))],
+      input: inputForField(task.field),
       progress: resolveProgress(existing.input.id),
     };
   }
 
-  // At the cap. `stored` is null when saveWorkLink refused because the member was already at five
-  // before this link - they confirmed a song that was not kept, and have to be told so.
-  return {
-    advance: true,
-    notice: stored
-      ? `${saved} That's the maximum, so we'll move on.`
-      : `You've already added the maximum of ${MAX_WORK_LINKS} links, so this one wasn't saved.`,
-  };
+  return finishSaveOutcome({ userId, existing, atCap, lastUrl: resolved.url, saved });
 }
 
 // Returns a reply offering to resume, or null when there is nothing to resume and the caller should
@@ -629,30 +706,6 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
     message = email;
   }
 
-  // Resolve the pre-payment review. The stashed input is the real payment block Typebot handed
-  // us a turn ago - either answer ends up returning it, because Typebot can't be driven backwards
-  // and stranding someone on a review screen would be worse than letting them pay and write in.
-  if (existing?.pendingPaymentReview && message !== undefined) {
-    const { input } = existing.pendingPaymentReview;
-    typebotSessionStore.set(userId, { sessionId: existing.sessionId, input });
-
-    if (confirmsReview(message)) {
-      return {
-        sessionEnded: false,
-        messages: [],
-        input,
-        progress: resolveProgress(input.id),
-      };
-    }
-
-    return {
-      sessionEnded: false,
-      messages: [textMessage('payment-review-correction', describeCorrection(userId))],
-      input,
-      progress: resolveProgress(input.id),
-    };
-  }
-
   // The payment button is where this flow stops. Paying happens through /payment/initiate and the
   // PayU callback, never through Typebot - so an answer arriving here is not a payment, it's a
   // member typing into the chat. Relaying it used to hand Typebot the button's own answer, which
@@ -684,7 +737,7 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
     // Names already on file: the identity-document name and the registration stage name are
     // evidence; aliases the member gave at this step on an earlier song are only their own claim.
     const { trusted, claimed } = await registrationService.getIdentityNames(userId);
-    const { matched, trust } = matchCredits(resolved, trusted, claimed);
+    const { matched } = matchCredits(resolved, trusted, claimed);
 
     if (!matched) {
       // Not in the credits. The usual reason is a stage name we don't have on file rather than a
@@ -703,7 +756,7 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       };
     }
 
-    const outcome = await saveAndOfferAnother({ userId, existing, resolved, trust, memberNames: [...trusted, ...claimed] });
+    const outcome = await saveAndOfferAnother({ userId, existing, resolved });
     if (!outcome.advance) return outcome;
     // At the cap: replay the url as the answer to the real Typebot step so the conversation
     // advances exactly as it would have without the loop, with the save bypassed. The notice
@@ -755,21 +808,72 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
     }
 
     // Either the supplied name is in the credits, or attempts ran out - both save. A member must
-    // never be stuck on this step; staff can find every claim from the CreatedBy marker.
+    // never be stuck on this step.
     const outcome = await saveAndOfferAnother({
       userId,
       existing,
       resolved,
-      trust: MATCH_TRUST.CLAIMED,
       note: matched
         ? "Thanks - we've saved this song, and we'll remember that name for your next one."
         : "We've saved this song. Our team will verify your credit on it.",
-      memberNames: names,
     });
     if (!outcome.advance) return outcome;
     workLinkNotice = outcome.notice;
     bypassWorkLinkSave = true;
     message = resolved.url;
+  }
+
+  // Resolve a pending per-song WorkCategory/LanguageNames/ReleaseYear answer - asked immediately
+  // after that song was confirmed and saved (see saveAndOfferAnother), one field at a time. Once its
+  // small queue is empty, continues exactly where saveAndOfferAnother would have: offering another
+  // link slot, or - at the cap - falling through to Typebot via the same bypass/replay every other
+  // path through this loop uses.
+  if (existing?.pendingWorkRowDetails && message !== undefined) {
+    const { queue, index, lastUrl, atCap, saved } = existing.pendingWorkRowDetails;
+    const task = queue[index];
+    const value = parseForField(task.field, message);
+
+    if (value == null) {
+      return {
+        sessionEnded: false,
+        messages: [textMessage('work-details-retry', describeWorkDetailsRetry(task))],
+        input: inputForField(task.field),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    try {
+      await workLinkService.updateWorkDetails(task.workNotificationId, {
+        [task.field]: task.field === 'ReleaseYear' ? BigInt(value) : value,
+      });
+    } catch (err) {
+      logger.warn({ userId, err, task }, 'Could not save a work-details answer, moving on without it');
+    }
+
+    const nextIndex = index + 1;
+    if (nextIndex < queue.length) {
+      typebotSessionStore.set(userId, {
+        sessionId: existing.sessionId,
+        input: existing.input,
+        pendingWorkRowDetails: { queue, index: nextIndex, lastUrl, atCap, saved },
+      });
+      const nextTask = queue[nextIndex];
+      return {
+        sessionEnded: false,
+        messages: [textMessage('work-details-ask', describeWorkDetailsPrompt(nextTask))],
+        input: inputForField(nextTask.field),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    typebotSessionStore.set(userId, { sessionId: existing.sessionId, input: existing.input });
+    existing = typebotSessionStore.get(userId);
+
+    const outcome = finishSaveOutcome({ userId, existing, atCap, lastUrl, saved });
+    if (!outcome.advance) return outcome;
+    workLinkNotice = outcome.notice;
+    bypassWorkLinkSave = true;
+    message = lastUrl;
   }
 
   // Resolve a pending "add another link?" answer - the incoming `message`
@@ -790,9 +894,63 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       };
     }
 
-    // Declined - replay the last link as the answer to the real Typebot step
-    // so the conversation advances exactly as it would have without the loop.
+    // Declined - before replaying the last link into the real Typebot step, ask WorkCategory/
+    // LanguageNames/ReleaseYear for every song saved this session that's still missing one. Nothing
+    // missing means startWorkDetailsFollowUp returns null and the replay happens immediately, exactly
+    // as before.
+    const detailsFollowUp = await startWorkDetailsFollowUp({ userId, existing, lastUrl });
+    if (detailsFollowUp) return detailsFollowUp;
+
     // bypassWorkLinkSave stops that replay from saving the same link twice.
+    bypassWorkLinkSave = true;
+    message = lastUrl;
+  }
+
+  // Resolve a pending WorkCategory/LanguageNames/ReleaseYear follow-up answer - one field at a time,
+  // across every song still missing one (see startWorkDetailsFollowUp / workDetailsGate.js). Once the
+  // queue is empty, replays the last work link into Typebot exactly like the direct-decline path.
+  if (existing?.pendingWorkDetails && message !== undefined) {
+    const { lastUrl, queue, index } = existing.pendingWorkDetails;
+    const task = queue[index];
+    const value = parseForField(task.field, message);
+
+    if (value == null) {
+      return {
+        sessionEnded: false,
+        messages: [textMessage('work-details-retry', describeWorkDetailsRetry(task))],
+        input: inputForField(task.field),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    try {
+      await workLinkService.updateWorkDetails(task.workNotificationId, {
+        [task.field]: task.field === 'ReleaseYear' ? BigInt(value) : value,
+      });
+    } catch (err) {
+      logger.warn({ userId, err, task }, 'Could not save a work-details answer, moving on without it');
+    }
+
+    const nextIndex = index + 1;
+    if (nextIndex < queue.length) {
+      typebotSessionStore.set(userId, {
+        sessionId: existing.sessionId,
+        input: existing.input,
+        pendingWorkDetails: { lastUrl, queue, index: nextIndex },
+      });
+      const nextTask = queue[nextIndex];
+      return {
+        sessionEnded: false,
+        messages: [textMessage('work-details-ask', describeWorkDetailsPrompt(nextTask))],
+        input: inputForField(nextTask.field),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    // All questions answered - replay the last link into the real Typebot step, same as the
+    // no-questions-missing path.
+    typebotSessionStore.set(userId, { sessionId: existing.sessionId, input: existing.input });
+    existing = typebotSessionStore.get(userId);
     bypassWorkLinkSave = true;
     message = lastUrl;
   }
@@ -870,10 +1028,18 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       verifyResult = await verifyValue(verifyStep.docType, message);
     } catch (err) {
       logger.warn({ userId, docType: verifyStep.docType, err }, 'Verification call failed');
-      // err.details.message is the verify service's OWN reason (e.g. "That is not a valid GSTIN
-      // format.") when it responded with success:false - a real network/timeout failure has no
-      // body to carry one, so describeVerifyError falls back to generic wording in that case.
-      const reason = typeof err.details?.message === 'string' ? err.details.message : null;
+      // Only a verdict about the NUMBER is worth repeating to the member, and the error's
+      // `code` is what says whose fault it was - not the mere presence of a message, which
+      // every refusal carries. A *_VERIFICATION_UNAVAILABLE means the registry could not be
+      // asked at all: the GST department's own backend answers "Backend Timed Out. Try
+      // Again." routinely, and that arrives here with a message, so telling the member to
+      // check a number that is very likely correct sent them round a loop they could not
+      // win. Anything that is not explicitly the number's fault gets the retry-safe wording.
+      const code = err.details?.code;
+      const blamesTheValue = typeof code === 'string' && code.endsWith('_MALFORMED');
+      const reason = blamesTheValue && typeof err.details?.message === 'string'
+        ? err.details.message
+        : null;
       return {
         sessionEnded: false,
         messages: [textMessage('verify-call-failed', describeVerifyError(verifyStep.label, reason))],
@@ -996,6 +1162,14 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       }
     }
 
+    if (SAME_AS_ADDRESS_BLOCK_IDS.has(answeredInput.id) && isAffirmative(message)) {
+      try {
+        await registrationService.copyPermanentAddressToCurrent(userId);
+      } catch (err) {
+        logger.warn({ userId, err }, 'Failed to copy permanent address to current, continuing relay');
+      }
+    }
+
     // Remember which document type the user just picked for their permanent/current address
     // proof - the paired file-upload question (next turn) has no way to know this on its own,
     // since the upload lands in one shared variable regardless of type. Consulted by
@@ -1067,24 +1241,19 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
   ];
   const messages = notices.length ? [...notices, ...(response.messages ?? [])] : (response.messages ?? []);
 
-  // Typebot just offered the payment button. Hold it back one turn and show the member everything
-  // on file first - much of it was read off their documents by OCR rather than typed, and this is
-  // the last point at which a wrong bank account number can still be caught. Typebot's own messages
-  // are kept above the review, so nothing the flow said is lost.
+  // Typebot just offered the payment button. Show the member everything on file first, in the same
+  // turn as the real payment button - much of it was read off their documents by OCR rather than
+  // typed, and this is the last point at which a wrong bank account number can still be caught.
+  // Typebot's own messages are kept above the review, so nothing the flow said is lost. There is no
+  // separate confirmation step: the review is informational, the button is always right there.
   if (!ended && isPaymentStep(response.input?.id)) {
     try {
       const sections = await registrationReviewService.buildReview(userId);
 
-      typebotSessionStore.set(userId, {
-        sessionId,
-        input: response.input,
-        pendingPaymentReview: { input: response.input },
-      });
-
       return {
         sessionEnded: false,
         messages: [...messages, textMessage('payment-review', describeReview(sections))],
-        input: PAYMENT_REVIEW_INPUT,
+        input: response.input,
         progress: resolveProgress(response.input.id),
       };
     } catch (err) {
@@ -1184,20 +1353,7 @@ async function handleUploadCore({ userId, token, file }) {
 
   let result = null;
   if (docType) {
-    try {
-      result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
-    } catch (err) {
-      if (err.errorCode === 'IDENTITY_NAME_MISMATCH') {
-        logger.warn({ userId, docType }, 'Identity document name mismatch - re-asking for the same document');
-        return {
-          sessionEnded: false,
-          messages: [textMessage('identity-name-mismatch', err.message)],
-          input: session.input,
-          progress: resolveProgress(session.input.id),
-        };
-      }
-      throw err;
-    }
+    result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
   }
 
   // OCR was attempted (result carries an `extracted` key, even if null) -

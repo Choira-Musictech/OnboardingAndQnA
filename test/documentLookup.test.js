@@ -96,6 +96,13 @@ test('buildAccountImagePath returns null for a null documentUrl', () => {
   assert.equal(buildAccountImagePath('12768', null), null);
 });
 
+test('buildAccountImagePath normalizes hyphens in the original filename to underscores', () => {
+  // Real filenames (WhatsApp exports, phone camera-roll names) commonly carry hyphens - IPRS's own
+  // convention is underscores throughout, so the prefix and the filename should match.
+  const url = 'https://s3.amazonaws.com/bucket/IMG-20260222-WA0027.jpg';
+  assert.equal(buildAccountImagePath('15207', url), 'MemberPhoto/MPU_15207_IMG_20260222_WA0027.jpg');
+});
+
 test('buildAccountImagePath truncates the filename to fit the NVarChar(100) budget, prefix intact', () => {
   const longName = 'x'.repeat(150) + '.jpg';
   const url = `https://s3.amazonaws.com/bucket/path/${longName}`;

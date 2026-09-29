@@ -55,6 +55,13 @@ export const ACCOUNT_FIELD_BY_VARIABLE_ID = {
   // and Owner/Publisher), asked right after the "Upload TRC" document step. Stored in TRCNo, a
   // column IPRS's real schema already has (confirmed against mraai_uat) - no new column needed.
   vub86kj2279m4imj3ri46ex4m: 'TRCNo',
+  // "I Accept" consent, single-choice, no reject option - the very first two questions in the
+  // flow. consent2 (this one) is only ever reachable after consent1 has already fired (traced the
+  // live flow's edges to confirm - one info text block sits between them, nothing else), so
+  // answering consent2 already means both were accepted. consent1's own variableId
+  // (vt7ywg1z4czezaywzpg8i1zo4) is deliberately left unmapped - it has nothing of its own to
+  // persist, see saveConversationField's Consent branch.
+  vrzmegndwvon5zs0ieyarz0jz: 'Consent',
 };
 
 export function resolveConversationField(variableId) {

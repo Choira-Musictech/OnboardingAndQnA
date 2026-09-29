@@ -75,7 +75,7 @@ src/
 │  ├─ registration/  controllers/services/repositories/validators + services/{ocr/*,verify/*,registrationReview.service.js}
 │  ├─ conversation/ services/{conversation.router,conversationJournal.service.js,emailOtpGate.js,
 │  │                typebot/typebotClient,typebotSessionStore,progressMap,documentTypeMap,
-│  │                addressProofTypeMap,conversationFieldMap,workLinkGate,paymentGate,verifyGate}.js
+│  │                addressProofTypeMap,conversationFieldMap,workLinkGate,workDetailsGate,paymentGate,verifyGate}.js
 │  │                + repositories/{conversationJournal.repository.js}
 │  │                + engines/{aiEngine,registrationEngine}.js
 │  ├─ work/         services/{workLinkResolver,musicCredits,youtube,gemini,workLink,workMatch}.service.js
@@ -748,17 +748,41 @@ a block id).
   happens. There is no longer a separate alias table — see the Prisma note above.
 - Saving is `workLinkService.saveWorkLink()` (one `App_Accounts_WorkRegistration` row), hard-capped
   at `MAX_WORK_LINKS = 5` **in the service**, not just the gate — the cap still bites if a restarted
-  conversation re-asks the step. `CreatedBy` is `'chat:name-matched'` or `'chat:name-unverified'`.
-  `Author_Composer`/`Author_Lyricist` are filled **only when the member's own on-file name is itself
-  inside that specific role's credit list** (`writerCredit()` reuses `matchCredits`'s comparison) —
-  role-labelled credits describe the *song*, not the member, and a stranger's name must never land in
-  a writer column (see the "grounded data only" note above).
+  conversation re-asks the step. `CreatedBy`/`ModifedBy` are both the member's own `AccountName`
+  (fetched via `registrationService.getIdentityNames()`), set together at creation and never touched
+  again — same pattern `registration.service.js` uses for `App_Accounts.CreatedBy`/`ModifedBy`.
+  `Author_Composer`/`Author_Lyricist` are filled directly from the confirmed song's own role-labelled
+  credits (whatever the credits service returned), independent of which specific role the confirming
+  member holds in it — `saveWorkLink()` only ever runs after the member has said "Yes, this is my
+  song" and passed the broader credits-match gate above, so the columns record the song's own writer
+  credit for that already-confirmed link, not a per-role identity check.
 - Name comparison is token-based (first and last tokens must correspond; initial-for-full-name and a
   one-letter typo are accepted; a single-token mononym credit may match the member's first *or* last
   token, but a single-token *member* name must equal the whole credit) — see `workMatch.service.js`,
   pinned by `test/workMatch.test.js`.
-- After each save a synthetic "add another?" input loops the step; at the cap the last URL is replayed
-  as the answer to Typebot's own question so the conversation advances normally.
+- Right after that song is saved, `saveAndOfferAnother()` asks its own `Film_AlbumName`/`Publisher`/
+  `WorkCategory`/`LanguageNames`/`ReleaseYear` - whichever the just-created row is missing, in that
+  order - before offering another link slot or falling through to Typebot. See `workDetailsGate.js`.
+  None of these five can always be sourced from Spotify/YouTube's credits (`ReleaseYear` is frequently
+  null on Spotify links specifically, from the Spotify Web API's known 403 issue above; `Film_AlbumName`
+  and `Publisher` are often missing on YouTube links whose description doesn't spell them out), so
+  they're asked here, one field at a time, right after "yes, that's my song" - not saved up into one
+  batch at the end, so a member with 3 links is asked about each song immediately after confirming it,
+  not all fifteen questions at once after the third. `Film_AlbumName`/`Publisher`/`LanguageNames` are
+  freeform text (whatever the member types is the authoritative answer, unlike the resolved-link
+  metadata elsewhere); `WorkCategory` is a fixed 5-option choice (`Film` / `Non Film` / `BG - TV` /
+  `BG-Film` / `AD - Jingle`); `ReleaseYear` requires a 4-digit year no more than one year in the
+  future. State lives in `pendingWorkRowDetails: { queue, index, lastUrl, atCap, saved }`; once that
+  song's queue is empty (including immediately, when nothing was missing), `finishSaveOutcome()`
+  either offers another link slot or - at the cap - falls through to Typebot exactly like the
+  direct-decline path always did. Each answer is written to its row immediately
+  (`workLinkService.updateWorkDetails()`), and a field already on file (e.g. a YouTube link whose
+  description did carry a year) is never re-asked.
+- After each save (and any details it needed) a synthetic "add another?" input loops the step; at the
+  cap the last URL is replayed as the answer to Typebot's own question so the conversation advances
+  normally. As a safety net for rows saved some other way (a replayed/resumed session, or older data),
+  `startWorkDetailsFollowUp()` re-checks every saved song for anything still missing when the member
+  taps "No, continue" - a no-op in the normal case, since the per-song ask above already covered it.
 
 ## Payment review
 

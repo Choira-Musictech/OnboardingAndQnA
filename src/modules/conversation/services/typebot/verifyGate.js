@@ -30,8 +30,12 @@ export function matchVerifyStep(variableId) {
 
 export const verifyValue = (docType, value) => verifyProvider.verify({ docType, value });
 
+// The registry's own wording arrives verbatim and does not always end a
+// sentence - "GSTIN not found" ran straight into the line after it.
+const asSentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`);
+
 export function describeVerifyFailure(label, message) {
-  const reason = message?.trim() ? message.trim() : `We couldn't verify that ${label}.`;
+  const reason = message?.trim() ? asSentence(message.trim()) : `We couldn't verify that ${label}.`;
   return `${reason} Please check it and enter it again.`;
 }
 
@@ -43,6 +47,6 @@ export function describeVerifyFailure(label, message) {
 // generic, retry-safe wording.
 export function describeVerifyError(label, reason) {
   const trimmed = reason?.trim();
-  if (trimmed) return `${trimmed} Please check it and enter it again.`;
+  if (trimmed) return `${asSentence(trimmed)} Please check it and enter it again.`;
   return `We're having trouble verifying that ${label} right now. Please try entering it again in a moment.`;
 }

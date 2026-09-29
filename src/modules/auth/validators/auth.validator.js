@@ -17,6 +17,9 @@ export const verifyOtpSchema = z.object({
   body: z.object({
     phone: phoneSchema,
     otp: z.string().regex(/^\d{4,6}$/, 'OTP must be 4-6 digits'),
+    // Frontend's own persisted browser id, if it sends one - see auth.service.js's verifyOtp,
+    // which falls back to a server-generated one when this is absent. GUID column is NVarChar(50).
+    guid: z.string().max(50).optional(),
   }),
 });
 

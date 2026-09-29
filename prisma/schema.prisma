@@ -137,6 +137,7 @@ model AppAccounts {
   Consent                    Int?      @default(0, map: "DF_App_Accounts_Consent_1") @db.TinyInt
   PublicIP                   String?   @db.NVarChar(50)
   Macid                      String?   @db.NVarChar(50)
+  GUID                       String?   @db.NVarChar(50)
   ConsentDate                DateTime? @db.DateTime
   misasiaMemIntNo            String?   @db.NVarChar(50)
   requestId                  BigInt?

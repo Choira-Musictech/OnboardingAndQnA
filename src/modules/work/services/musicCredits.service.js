@@ -16,6 +16,14 @@
 //            shelf for the label's own credit block, which is then
 //            parsed by label ("Music:", "Lyrics:", "Singers:").
 //
+//            FALLBACK: a video not registered on YouTube Music has no
+//            InnerTube music renderer at all (verified live: a real song,
+//            "Jai Durga", answers this way), even though it has a normal
+//            description on YouTube itself. fetchFromYoutubeDataApi()
+//            reads that description via the real YouTube Data API
+//            (env.YOUTUBE_API_KEY, optional) instead - same label parsing,
+//            just a different, always-available description source.
+//
 // WHY THIS EXISTS: it is the first source this app has that says what a
 // credited person actually *did*. The Spotify Web API returns one
 // unlabelled bag of artists that mixes performers with writers, and a
@@ -29,6 +37,7 @@
 // ==================================================================
 import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
+import { parseYoutubeVideoId } from './youtube.service.js';
 
 export const CREDIT_PLATFORMS = Object.freeze({ SPOTIFY: 'spotify', YOUTUBE: 'youtube' });
 
@@ -165,7 +174,7 @@ function runsText(node) {
 // qualify. "Written by" is excluded on purpose - in a film description it is the screenwriter
 // ("Written by: Niren Bhatt" alongside "Directed by"), not the lyricist.
 const CREDIT_LABELS = [
-  { field: 'composers', patterns: [/^music$/, /^music by$/, /^composers?$/, /^composed by$/, /^music composed by$/] },
+  { field: 'composers', patterns: [/^music$/, /^music by$/, /^composers?$/, /^composed by$/, /^music composed by$/, /^music composers?$/] },
   { field: 'lyricists', patterns: [/^lyrics$/, /^lyrics by$/, /^lyricists?$/, /^lyrics written by$/] },
   { field: 'artists', patterns: [/^singers?$/, /^singer[s]? *\(.*\)$/, /^vocals$/, /^sung by$/, /^featuring$/] },
   { field: 'producers', patterns: [/^music producer$/, /^produced by$/, /^producers?$/] },
@@ -191,7 +200,10 @@ function parseDescription(description) {
   if (!description) return { ...found, allNames: [] };
 
   for (const line of description.split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z][A-Za-z0-9 &'/().-]{1,40}?)\s*[:–-]\s*(.+?)\s*$/.exec(line);
+    // Many labels (verified live: a real "MAKHNA" video's own description) are bulleted with a
+    // leading symbol - "♪ Music: ...", "♪ Lyrics: ..." - which the label group must skip over, or
+    // every credit line in that description block fails to match at all.
+    const match = /^\s*[^\p{L}\n]{0,3}\s*([A-Za-z][A-Za-z0-9 &'/().-]{1,40}?)\s*[:–-]\s*(.+?)\s*$/u.exec(line);
     if (!match) continue;
 
     const label = match[1].trim().toLowerCase().replace(/\s+/g, ' ');
@@ -269,14 +281,65 @@ function normalizeYoutube(payload) {
   };
 }
 
+// Fallback for videos with no InnerTube music renderer at all (not registered on YouTube Music -
+// verified live: a real song, "Jai Durga", answers this way) - the video still has an ordinary
+// description on YouTube itself, just not exposed through the music-specific shelf renderer
+// /youtube/raw reads. The official Data API's videos.list?part=snippet gives that same description
+// text (parsed with the exact same parseDescription() label rules - no separate parsing logic) plus
+// a real publishedAt date, for any public video regardless of YouTube Music registration.
+async function fetchFromYoutubeDataApi(url) {
+  if (!env.YOUTUBE_API_KEY) return null;
+
+  const videoId = parseYoutubeVideoId(url);
+  if (!videoId) return null;
+
+  let response;
+  try {
+    response = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${env.YOUTUBE_API_KEY}`,
+      { signal: AbortSignal.timeout(env.YOUTUBE_REQUEST_TIMEOUT_MS) },
+    );
+  } catch (err) {
+    logger.warn({ err, url }, 'YouTube Data API unreachable, continuing without it');
+    return null;
+  }
+
+  if (!response.ok) {
+    logger.warn({ status: response.status, url }, 'YouTube Data API returned no snippet');
+    return null;
+  }
+
+  const snippet = (await response.json().catch(() => null))?.items?.[0]?.snippet;
+  if (!snippet) return null;
+
+  const parsed = parseDescription(snippet.description);
+  const year = /^(\d{4})/.exec(snippet.publishedAt ?? '')?.[1];
+
+  return {
+    platform: CREDIT_PLATFORMS.YOUTUBE,
+    songName: parsed.songName,
+    artists: parsed.artists,
+    composers: parsed.composers,
+    lyricists: parsed.lyricists,
+    producers: parsed.producers,
+    publisher: null,
+    filmOrAlbum: parsed.filmOrAlbum,
+    releaseYear: year ? Number(year) : null,
+    creditText: text(snippet.description),
+    channelName: text(snippet.channelTitle),
+    allCredits: parsed.allNames,
+  };
+}
+
 export async function fetchYoutubeCredits(url) {
   const payload = await getJson(`/youtube/raw?url=${encodeURIComponent(url)}`, url);
-  if (!payload) return null;
-  const normalized = normalizeYoutube(payload);
-  if (!normalized) return null;
   // A music page with an empty description still identifies the song via its header, so the
   // usability test is applied to what the header gave us.
-  return hasUsableCredits(normalized) ? normalized : null;
+  const fromInnerTube = payload ? normalizeYoutube(payload) : null;
+  if (fromInnerTube && hasUsableCredits(fromInnerTube)) return fromInnerTube;
+
+  const fromDataApi = await fetchFromYoutubeDataApi(url);
+  return fromDataApi && hasUsableCredits(fromDataApi) ? fromDataApi : null;
 }
 
 export const musicCreditsService = {

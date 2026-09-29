@@ -10,6 +10,14 @@
 // `{ status: false, message: "Invalid GSTIN", data: null }` for a wrong
 // GSTIN and `{ status: true, message: "GSTIN verified successfully", data:
 // {...} }` for a valid one. `status` is what decides pass/fail here.
+//
+// A 200 carrying status:false is the REGISTRY ANSWERING NO - the number was
+// looked up and is not registered. That is a verdict about the value, and it
+// comes back as verified:false so the caller can say so. It is not the same
+// event as a lookup that could not happen at all: the registry timing out, a
+// rate limit, a malformed request, an unreachable service. Those are non-2xx
+// and still throw, because the member's number may well be fine and telling
+// them to correct it would send them round a loop with no exit.
 // ==================================================================
 import { appError } from '../../../../shared/errors.js';
 import { env } from '../../../../config/env.js';
@@ -41,6 +49,10 @@ export function createHttpVerifyProvider() {
     }
 
     const body = await response.json().catch(() => null);
+
+    if (response.ok && body && body.status === false) {
+      return { verified: false, message: body.message, data: body.data ?? null };
+    }
 
     if (!response.ok || !body?.status) {
       throw appError(body?.message ?? `Verify request failed with status ${response.status}`, {

@@ -29,14 +29,22 @@ function normalize(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// A handful of lookup rows carry a trailing qualifier the frontend's own picker already strips
+// before showing/submitting a name (e.g. row 193 is literally "Manipuri (Meitei)", but a member
+// selects and sends plain "Manipuri") - match on both the qualifier and the bare name.
+function stripQualifier(value) {
+  return value.replace(/\s*\([^)]*\)\s*$/, '').trim();
+}
+
 let cache = null; // [{ id, names: Set<normalized alias> }], loaded once - 218 static rows, never written by this app
 async function loadLanguages() {
   if (cache) return cache;
   const rows = await prisma.appLanguageLookup.findMany({ select: { LanguageId: true, LanguageName: true } });
-  cache = rows.map((row) => ({
-    id: row.LanguageId,
-    names: new Set((row.LanguageName ?? '').split(',').map(normalize).filter(Boolean)),
-  }));
+  cache = rows.map((row) => {
+    const segments = (row.LanguageName ?? '').split(',').map(normalize).filter(Boolean);
+    const withoutQualifiers = segments.map((s) => normalize(stripQualifier(s))).filter(Boolean);
+    return { id: row.LanguageId, names: new Set([...segments, ...withoutQualifiers]) };
+  });
   return cache;
 }
 

@@ -17,7 +17,7 @@ export const sendOtp = async (req, res, next) => {
 
 export const verifyOtp = async (req, res, next) => {
   try {
-    const result = await authService.verifyOtp(req.body);
+    const result = await authService.verifyOtp({ ...req.body, ip: req.ip });
     return ok(res, { data: result });
   } catch (err) {
     return next(err);

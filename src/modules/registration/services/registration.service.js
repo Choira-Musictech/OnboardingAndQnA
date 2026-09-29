@@ -6,10 +6,10 @@
 import { appError, badRequestError, forbiddenError, notFoundError } from '../../../shared/errors.js';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
+import { prisma } from '../../../shared/prisma.js';
 import { registrationRepository } from '../repositories/registration.repository.js';
 import { createOcrProvider } from './ocr/ocrProvider.factory.js';
 import { paymentRepository } from '../../payment/repositories/payment.repository.js';
-import { workMatchService } from '../../work/services/workMatch.service.js';
 import {
   PUBLISHER_ROLL_TYPE_ID_BY_REG_TYPE,
   resolveEntityType,
@@ -34,14 +34,19 @@ const DOC_TYPES = Object.freeze({
   // type was picked is routed to OCR conditionally - see addressProofTypeMap.js.
   PERMANENT_ADDRESS_PROOF: 'PERMANENT_ADDRESS_PROOF',
   CURRENT_ADDRESS_PROOF: 'CURRENT_ADDRESS_PROOF',
-  // OCR-only doc types reachable via PERMANENT_ADDRESS_PROOF/CURRENT_ADDRESS_PROOF uploads when
-  // the user picked one of these as their address-proof type - never a stored document type on their
-  // own, only ever passed as saveDocument()'s ocrDocType override. "Letter from Property Owner"
-  // (the 5th address-proof choice) has no matching OCR endpoint anywhere and stays unmapped.
+  // OCR-only doc types reachable via PERMANENT_ADDRESS_PROOF/CURRENT_ADDRESS_PROOF/
+  // REGISTERED_ADDRESS_PROOF/COMM_ADDRESS_PROOF_2 uploads when the user picked one of these as
+  // their address-proof type - never a stored document type on their own, only ever passed as
+  // saveDocument()'s ocrDocType override. "Letter from Property Owner"/"Telephone Bill"/
+  // "Mobile Bill"/"Rent Agreement" have no matching OCR endpoint anywhere and stay unmapped.
   DRIVING_LICENCE: 'DRIVING_LICENCE',
   VOTER_ID: 'VOTER_ID',
   PASSPORT: 'PASSPORT',
   ELECTRICITY: 'ELECTRICITY',
+  // GST Certificate, chosen as an address-proof type on the company/NRI paths - see
+  // addressProofTypeMap.js. Confirmed live: POST /api/documents/gst returns legalName/gstin/
+  // address/pincode for a real certificate.
+  GST: 'GST',
   // (NRI) Author/Composer path uploads - all save-only, no OCR endpoint exists for any of these
   // (same treatment as NOC/COMPANY_DOC).
   TRC: 'TRC',
@@ -80,7 +85,7 @@ const DOC_TYPES = Object.freeze({
 // Exported because the conversation engine has to apply the same mapping when it labels the
 // OCR-confirmation card - it only knows the stored docType, and looking up COMPANY_PAN in
 // OCR_FIELD_LABELS found nothing, so the card listed no fields at all.
-export const OCR_TYPE_BY_DOC_TYPE = { COMPANY_PAN: 'PAN' };
+export const OCR_TYPE_BY_DOC_TYPE = { COMPANY_PAN: 'PAN', GST_CERTIFICATE: 'GST' };
 // What gates /complete - NOC/COMPANY_DOC/PROFILE_PHOTO/CURRENT_ADDRESS_PROOF are
 // conditional/optional in the flow. Each entry is satisfied by *any one* of its types, because the
 // same real-world requirement is collected under a different doc type on each role path: an
@@ -121,10 +126,13 @@ export const OCR_DOC_TYPES = [
   DOC_TYPES.VOTER_ID,
   DOC_TYPES.ELECTRICITY,
   DOC_TYPES.PASSPORT,
+  DOC_TYPES.GST,
 ];
 // Doc types whose OCR `name` is trustworthy enough to become AccountName. Address proofs are
-// excluded on purpose: an electricity bill or a rent letter routinely carries someone else's name.
-const IDENTITY_OCR_DOC_TYPES = [DOC_TYPES.PAN, DOC_TYPES.AADHAAR, DOC_TYPES.PASSPORT];
+// excluded on purpose: an electricity bill or a rent letter routinely carries someone else's name -
+// GST is the one exception: its `legalName` is the registered entity's own name (same company as
+// COMPANY_PAN, not a landlord/relative), read from a government registration document.
+const IDENTITY_OCR_DOC_TYPES = [DOC_TYPES.PAN, DOC_TYPES.AADHAAR, DOC_TYPES.PASSPORT, DOC_TYPES.GST];
 // AppAccounts has no dedicated PAN/Aadhaar-number columns at all - PAN goes to the generic
 // Detail2 column (which IPRS's real schema already has), and the Aadhaar OCR result is used for
 // verification only. Bank OCR maps onto its existing columns.
@@ -140,6 +148,43 @@ const ADDRESS_COLUMN_BY_SLOT = {
   [DOC_TYPES.REGISTERED_ADDRESS_PROOF]: 'AccountAddress',
   [DOC_TYPES.COMM_ADDRESS_PROOF_2]: 'AccountAddress_PR',
 };
+// Each address column's paired pincode column - AccountAddress/AccountAddress_PR always travel
+// together (same permanent-vs-current split), so whichever one gets written, its pincode sibling
+// does too.
+const PINCODE_COLUMN_BY_ADDRESS_COLUMN = { AccountAddress: 'Pincode', AccountAddress_PR: 'Pincode_PR' };
+
+// App_Accounts.BookId - IPRS's own dbo.GetStateBookId SQL function (confirmed live on mraai_uat)
+// already encodes the real zone/category logic, including a quirk that isn't derivable from data
+// alone: NRI categories (NI/NC) don't zone-match by state at all, they're hardcoded to the West
+// NRI book. Rather than re-deriving that in JS (and risking getting quirks like this wrong), this
+// runs their exact reference query per AccountId - it reads AccountRegType/Pincode off the row
+// itself, so no other args are needed. Both AccountRegType and the permanent address/pincode can
+// be answered in either order by the flow, so this is called after either one is written - same
+// re-derivation pattern copyPermanentAddressToCurrent already uses.
+async function resolveAndPersistBookId(registrationId) {
+  const rows = await prisma.$queryRaw`
+    SELECT dbo.GetStateBookId(AG.GroupId, AA.AccountRegType) AS BookId
+    FROM App_Accounts AA
+    CROSS APPLY (
+      SELECT TOP 1 GroupId FROM App_Geographical
+      WHERE GeographicalCode = CAST(AA.Pincode AS VARCHAR(20))
+    ) AG
+    WHERE AA.AccountId = ${BigInt(registrationId)}
+  `;
+  const bookId = rows[0]?.BookId;
+  if (bookId == null) return;
+  await registrationRepository.update(registrationId, { BookId: bookId });
+}
+
+// Neither OCR nor a manually-typed address gives us a separate pincode field - just one flat
+// address string. Indian PIN codes are 6 digits, first digit 1-9, and sit at the end of a full
+// address, so take the LAST standalone match rather than the first (a house/flat number earlier in
+// the string could otherwise be mistaken for one).
+function extractPincode(address) {
+  if (typeof address !== 'string') return null;
+  const matches = address.match(/\b[1-9]\d{5}\b/g);
+  return matches?.length ? matches[matches.length - 1] : null;
+}
 // Fields conversationFieldMap.js is allowed to write to - keeps an arbitrary
 // mapped column name from being trusted blindly, even though the map only
 // ever contains these three today.
@@ -162,6 +207,7 @@ const CONVERSATION_FIELDS = [
   'EntityType',
   'LanguageName', // mother tongue - also resolves LanguageId, see saveConversationField
   'TRCNo', // Tax Residency Certificate number (NRI paths)
+  'Consent', // "I Accept" x2 - special-cased below, the answer text itself is never stored
 ];
 
 // Exported (not just a local const) so tests can swap ocrProvider.extract, same technique
@@ -258,7 +304,9 @@ export function buildDocFileName(accountId, documentLookupId, documentUrl) {
 // prod's own convention (confirmed against mraai_uat) instead of a truncated, broken link. The
 // actual openable URL stays in App_Accounts_Doc.DocumentCaption, untouched.
 export function buildAccountImagePath(accountId, documentUrl) {
-  const plain = extractFileName(documentUrl);
+  // IPRS's own convention is underscores throughout, but the original filename (a WhatsApp export,
+  // a phone's camera roll name) often carries hyphens instead - normalize before building the path.
+  const plain = extractFileName(documentUrl)?.replaceAll('-', '_');
   if (!plain) return null;
 
   const prefix = `MemberPhoto/MPU_${accountId}_`;
@@ -295,6 +343,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     docStatus,
     documentLookupId,
     docFileName: buildDocFileName(registrationId, documentLookupId, documentUrl),
+    createdBy: account?.AccountName?.trim() || null,
   });
 
   if (docType === DOC_TYPES.PROFILE_PHOTO) {
@@ -351,11 +400,48 @@ async function saveConversationField(userId, registrationId, field, value) {
     // languageLookup.service.js. The member's own words always get stored; LanguageId only on a
     // confident match against IPRS's App_Language_Lookup, never guessed.
     update = { LanguageName: trimmed, LanguageId: await languageLookupService.resolveLanguageId(trimmed) };
+  } else if (field === 'AccountAddress' || field === 'AccountAddress_PR') {
+    update = { [field]: trimmed };
+    const pincode = extractPincode(trimmed);
+    if (pincode) update[PINCODE_COLUMN_BY_ADDRESS_COLUMN[field]] = pincode;
+  } else if (field === 'Consent') {
+    // Single-choice "I Accept", no reject option - the answer text carries no information beyond
+    // "this block was reached", and reaching it means both consent blocks were accepted (see
+    // conversationFieldMap.js's comment on this variableId).
+    update = { Consent: 1, ConsentDate: new Date() };
   } else {
     update = { [field]: trimmed };
   }
 
   await registrationRepository.update(registrationId, update);
+
+  // BookId depends on AccountRegType and the permanent address's Pincode, answerable in either
+  // order by the flow - re-resolve after whichever one just landed (AccountAddress_PR is the
+  // current/communication address, not the permanent one dbo.GetStateBookId's query reads).
+  // This is a best-effort follow-up, not part of saving the answer itself - a failure here (e.g.
+  // dbo.GetStateBookId missing on a deployed DB - confirmed live) must never fail the chat answer
+  // that was just saved above.
+  if (field === 'AccountRegType' || field === 'AccountAddress') {
+    try {
+      await resolveAndPersistBookId(registrationId);
+    } catch (err) {
+      logger.warn({ registrationId, err }, 'Could not resolve BookId, continuing without it');
+    }
+  }
+}
+
+// "Is your current address the same as your permanent address?" - Typebot's own choice-input
+// block for this carries no variableId (nothing observes the answer today), so registrationEngine
+// calls this directly by block id when the member answers "Yes". Copies both the address and its
+// pincode - the two always travel together (see PINCODE_COLUMN_BY_ADDRESS_COLUMN).
+async function copyPermanentAddressToCurrent(userId) {
+  const account = await registrationRepository.findByAccountId(userId);
+  if (!account?.AccountAddress?.trim()) return;
+
+  await registrationRepository.update(userId, {
+    AccountAddress_PR: account.AccountAddress,
+    ...(account.Pincode ? { Pincode_PR: account.Pincode } : {}),
+  });
 }
 
 function normalizeEmail(value) {
@@ -459,50 +545,78 @@ function parseOcrDate(value) {
 // Exported for ocrLabels.test.js - a pure function, and the passport field names are exactly
 // the kind of thing that breaks silently.
 export function normalizeExtracted(docType, extracted) {
-  if (docType !== DOC_TYPES.PASSPORT || !extracted) return extracted;
-  const fullName = [extracted.givenName, extracted.surname].filter(Boolean).join(' ').trim();
-  return {
-    ...extracted,
-    name: extracted.name ?? (fullName || undefined),
-    dob: extracted.dob ?? extracted.dateOfBirth,
-    gender: extracted.gender ?? extracted.sex,
-  };
-}
+  if (!extracted) return extracted;
 
-// Reuses the same first+last-token matching workMatchService.matchCredits already uses for
-// work-link credit matching (tolerates OCR noise - dropped middle names, initials, one-character
-// typos) instead of a bespoke matcher, since it's an already-proven "is this plausibly the same
-// person" check.
-function identityNameMatches(existingName, extractedName) {
-  return workMatchService.matchCredits({ credits: [extractedName] }, [existingName]).matched;
+  if (docType === DOC_TYPES.PAN) {
+    // Confirmed live against the real document-OCR endpoint (POST /api/documents/pan with a real
+    // card): { pan, name, fatherName, dob, gender, isValid, ... } - pan/name were already right; no
+    // full_name_split field exists there (that shape belongs to a separate "PAN Comprehensive"
+    // verification API, not this one - its response is nested inside this one's own
+    // `verification` block). Split `name` itself instead; keep full_name_split as a fallback in
+    // case a future response variant does send it.
+    const providedSplit = Array.isArray(extracted.full_name_split) ? extracted.full_name_split.filter(Boolean) : [];
+    const name = extracted.name ?? extracted.full_name;
+    const tokens = providedSplit.length ? providedSplit : (name ? name.trim().split(/\s+/).filter(Boolean) : []);
+    return {
+      ...extracted,
+      pan: extracted.pan ?? extracted.pan_number,
+      name,
+      // Both, when the response has both - not just whichever comes first. Most PAN cards only
+      // ever print one, but this doesn't assume that.
+      parentName: [extracted.fatherName, extracted.motherName].filter(Boolean).join(', ') || undefined,
+      // First two tokens join into FirstName, whatever's left joins into LastName.
+      firstName: tokens.length ? tokens.slice(0, 2).join(' ') : undefined,
+      lastName: tokens.length > 2 ? tokens.slice(2).join(' ') : undefined,
+    };
+  }
+
+  if (docType === DOC_TYPES.PASSPORT) {
+    const fullName = [extracted.givenName, extracted.surname].filter(Boolean).join(' ').trim();
+    return {
+      ...extracted,
+      name: extracted.name ?? (fullName || undefined),
+      dob: extracted.dob ?? extracted.dateOfBirth,
+      gender: extracted.gender ?? extracted.sex,
+    };
+  }
+
+  if (docType !== DOC_TYPES.GST) return extracted;
+  // Confirmed live against the real document-OCR endpoint (POST /api/documents/gst with a real
+  // certificate): { legalName, gstin, address, pincode, isValid, ... } - address/pincode/gstin/
+  // isValid already match the names the rest of this pipeline reads; only `legalName` needs
+  // renaming onto the shared `name` field the AccountName write-once block and confirmation card use.
+  return { ...extracted, name: extracted.legalName };
 }
 
 async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlot) {
   try {
-    const extracted = normalizeExtracted(docType, await ocrProvider.extract({ docType, documentUrl }));
+    // addressSlot is the ORIGINAL upload slot before OCR_TYPE_BY_DOC_TYPE's remap (docType is the
+    // remapped, effective OCR type) - PAN vs COMPANY_PAN tells the pan endpoint which holder type
+    // to expect. Shared across all 4 flow paths (the same PAN/COMPANY_PAN slots are reused by both
+    // domestic and NRI branches), so this needs no path-specific branching.
     const account = await registrationRepository.findByAccountId(registrationId);
-
-    // A member could upload their own PAN, then a different person's Aadhaar/Passport - nothing
-    // used to check the second identity document's name against the first. Block outright: nothing
-    // from this document (not just the name) is trustworthy once the name doesn't match, so this
-    // throws before any of the writes below run. IDENTITY_NAME_CHECK_ENABLED mirrors OCR_ENABLED/
-    // GST_VERIFY_ENABLED's kill-switch shape, for local testing with mismatched dummy documents.
-    if (env.IDENTITY_NAME_CHECK_ENABLED && IDENTITY_OCR_DOC_TYPES.includes(docType) && extracted.name) {
-      const existingName = account?.AccountName?.trim();
-      if (existingName && !identityNameMatches(existingName, extracted.name)) {
-        logger.warn(
-          { registrationId, docType, existingName, extractedName: extracted.name },
-          'Identity document name does not match the account - refusing to save',
-        );
-        throw appError(
-          "The name on this document doesn't match the name already on your account. Please make sure every document you upload belongs to you.",
-          { statusCode: 400, errorCode: 'IDENTITY_NAME_MISMATCH' },
-        );
-      }
-    }
+    const panHolderType = docType === DOC_TYPES.PAN
+      ? (addressSlot === DOC_TYPES.COMPANY_PAN ? 'c' : addressSlot === DOC_TYPES.PAN ? 'p' : undefined)
+      : undefined;
+    // holderName is sent for the OCR service's own name verification (DRIVING_LICENCE/PASSPORT/
+    // VOTER_ID/BANK only, confirmed with the OCR team - see httpOcrProvider.js). On the two company
+    // paths (C/NC), AccountName already holds the COMPANY's own name, not a person's - it comes from
+    // COMPANY_PAN's OCR (remapped to effective docType 'PAN' - see OCR_TYPE_BY_DOC_TYPE), whose own
+    // `name` field is the company's registered name on that PAN card, written into AccountName by
+    // the IDENTITY_OCR_DOC_TYPES block below. Sending it here lets the BANK OCR call verify the
+    // uploaded passbook/cheque is actually in the company's name, same as the individual path
+    // verifies its own AccountName against its bank document.
+    const holderName = account?.AccountName?.trim() || undefined;
+    const extracted = normalizeExtracted(docType, await ocrProvider.extract({ docType, documentUrl, panHolderType, holderName }));
 
     if (docType === DOC_TYPES.PAN && extracted.pan) {
-      await registrationRepository.update(registrationId, { Detail2: extracted.pan });
+      const panUpdate = { Detail2: extracted.pan };
+      // Write-once, same guard AccountName uses below - a later PAN re-upload shouldn't clobber an
+      // already-confirmed name split.
+      if (extracted.firstName && !account?.FirstName?.trim()) panUpdate.FirstName = extracted.firstName.slice(0, 30);
+      if (extracted.lastName && !account?.LastName?.trim()) panUpdate.LastName = extracted.lastName.slice(0, 45);
+      if (extracted.parentName && !account?.FatherName?.trim()) panUpdate.FatherName = extracted.parentName.slice(0, 100);
+      await registrationRepository.update(registrationId, panUpdate);
     }
 
     // The member's name, taken from an identity document. This is the only name in the system with
@@ -514,7 +628,22 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     // on the row. Restricted to identity documents too - an electricity bill's name is often a
     // landlord's or a parent's, which is evidence of nothing.
     if (IDENTITY_OCR_DOC_TYPES.includes(docType) && extracted.name && !account?.AccountName?.trim()) {
-      await registrationRepository.update(registrationId, { AccountName: String(extracted.name).trim().slice(0, 100) });
+      const name = String(extracted.name).trim().slice(0, 100);
+      const nameUpdate = { AccountName: name };
+      // Same "write once" guard as AccountName above - the member's name is the first trustworthy
+      // identity this account has, so it doubles as who created/last-touched the account record.
+      if (!account?.CreatedBy?.trim()) nameUpdate.CreatedBy = name;
+      if (!account?.ModifedBy?.trim()) nameUpdate.ModifedBy = name;
+      await registrationRepository.update(registrationId, nameUpdate);
+    }
+
+    // GST number - Detail1. The company/NRI chat flow has no typed "what's your GST number"
+    // question of its own (that text step, gated by GST_VERIFY_ENABLED, lives on a path this flow
+    // never reaches), so this is the only source Detail1 ever gets filled from. Write-once, same
+    // guard as AccountName/FirstName/LastName above: fires from either GST upload slot (the
+    // required GST_CERTIFICATE doc, or the address-proof GST option), whichever arrives first wins.
+    if (docType === DOC_TYPES.GST && extracted.gstin && !account?.Detail1?.trim()) {
+      await registrationRepository.update(registrationId, { Detail1: extracted.gstin });
     }
 
     if (docType === DOC_TYPES.BANK) {
@@ -529,7 +658,29 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
 
     const addressColumn = ADDRESS_COLUMN_BY_SLOT[addressSlot];
     if (extracted.address && addressColumn) {
-      await registrationRepository.update(registrationId, { [addressColumn]: extracted.address });
+      const addressUpdate = { [addressColumn]: extracted.address };
+      const pincode = extractPincode(extracted.address);
+      if (pincode) addressUpdate[PINCODE_COLUMN_BY_ADDRESS_COLUMN[addressColumn]] = pincode;
+      await registrationRepository.update(registrationId, addressUpdate);
+      // Most members fill the permanent address via a document upload (this branch), not the
+      // manual-typed chat question - BookId's resolution has to fire from here too, not just
+      // saveConversationField's AccountAddress branch, or it silently never runs for them.
+      // Best-effort, same as that call site: a BookId failure (e.g. dbo.GetStateBookId missing on a
+      // deployed DB - confirmed live) is not a document-verification failure and must never be
+      // reported to the member as one, nor block the address that was already saved above.
+      if (addressColumn === 'AccountAddress') {
+        try {
+          await resolveAndPersistBookId(registrationId);
+        } catch (bookIdErr) {
+          // Logged at error level, not warn: a member whose BookId never resolved is a
+          // record someone has to finish by hand, so this needs to be findable. It is
+          // still not a reason to reject a document that read correctly.
+          logger.error(
+            { registrationId, docType, err: bookIdErr },
+            'BookId resolution failed, document kept and address saved',
+          );
+        }
+      }
     }
 
     // Whichever doc type happens to extract these - PAN/Passport for dob, Aadhaar/Voter ID for
@@ -552,17 +703,13 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     // persisted to AppAccounts - only used here to compute `verified`.
     return { verified: Boolean(extracted.isValid), extracted };
   } catch (err) {
-    // A name-mismatch is a genuine rejection, not a soft "couldn't read it" failure - let it
-    // propagate to saveDocument()'s caller instead of being logged-and-swallowed below.
-    if (err.errorCode === 'IDENTITY_NAME_MISMATCH') throw err;
-
     logger.warn(
       { registrationId, docType, stage: err.details?.stage, details: err.details, err },
       'OCR extraction failed, document saved unverified',
     );
     // Surfaces the OCR service's own message (e.g. a wrong-document-type or low-confidence reason)
     // up to the user-facing failure text in registrationEngine.js, instead of only a generic one.
-    return { verified: false, extracted: null, failureReason: err.message || null };
+    return { verified: false, extracted: null, failureReason: err.errorCode ? err.message || null : null };
   }
 }
 
@@ -649,6 +796,7 @@ export const registrationService = {
   getStatus,
   saveDocument,
   saveConversationField,
+  copyPermanentAddressToCurrent,
   isEmailTakenByAnotherAccount,
   addAliases,
   parseAliasList,

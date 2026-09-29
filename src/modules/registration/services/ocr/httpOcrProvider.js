@@ -23,10 +23,28 @@ const DOC_TYPE_PATHS = {
   VOTER_ID: 'voter-id',
   ELECTRICITY: 'electricity',
   PASSPORT: 'passport',
+  GST: 'gst',
 };
 
+// Confirmed with the OCR team (not in the service's own Postman collection) - DRIVING_LICENCE/
+// PASSPORT/VOTER_ID/BANK accept an optional `name` field so the service can verify the document's
+// name against it. GST was never documented for this but was live-probed this session and behaves
+// identically: sending `name` gets a real government-registry name check back, matching returns 201,
+// a mismatch returns 422 with code NAME_MISMATCH and the service's own message - exactly the same
+// contract, so it's included here too, and this app has no cross-document name check of its own
+// anymore (relies entirely on the OCR service for this). BANK covers both passbook and cheque - this
+// app has a single BANK doc type/OCR endpoint for both. Deliberately NOT every doc type -
+// AADHAAR/ELECTRICITY keep sending only { documentUrl }, user-confirmed scope. Gated by
+// env.OCR_NAME_VERIFICATION_ENABLED (see config/env.js) - a
+// blanket kill-switch, same shape as OCR_ENABLED, for when this check blocks testing.
+const NAME_VERIFIED_DOC_TYPES = new Set(['DRIVING_LICENCE', 'PASSPORT', 'VOTER_ID', 'BANK', 'GST']);
+
 export function createHttpOcrProvider() {
-  async function extract({ docType, documentUrl }) {
+  // panHolderType: confirmed with the OCR team (not in the service's own Postman collection) - the
+  // `pan` endpoint accepts an optional `type` field, "p" for a person's PAN, "c" for a company's,
+  // so it knows which holder type to expect from the card image. Only meaningful for docType=PAN -
+  // ignored (and omitted from the request body) for every other doc type.
+  async function extract({ docType, documentUrl, panHolderType, holderName }) {
     const path = DOC_TYPE_PATHS[docType];
     if (!path) {
       throw appError(`No OCR endpoint for docType=${docType}`, {
@@ -35,12 +53,20 @@ export function createHttpOcrProvider() {
       });
     }
 
+    const requestBody = { documentUrl };
+    if (docType === 'PAN' && (panHolderType === 'p' || panHolderType === 'c')) {
+      requestBody.type = panHolderType;
+    }
+    if (env.OCR_NAME_VERIFICATION_ENABLED && NAME_VERIFIED_DOC_TYPES.has(docType)) {
+      requestBody.name = holderName || '';
+    }
+
     let response;
     try {
       response = await fetch(`${env.OCR_API_BASE_URL}/api/documents/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentUrl }),
+        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(env.OCR_REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
