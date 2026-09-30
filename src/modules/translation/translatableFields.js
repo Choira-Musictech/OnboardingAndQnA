@@ -15,7 +15,14 @@
 // Keys whose STRING values are member-facing copy. `content` is in here for
 // choice items (a string); on a message it is an object and so is walked, not
 // translated - the type check below is what separates the two.
-const TRANSLATABLE_KEYS = new Set(['text', 'content', 'placeholder', 'button', 'title']);
+const TRANSLATABLE_KEYS = new Set([
+  'text', 'content', 'placeholder', 'button', 'title',
+  // The line the upload steps print under their title, and the labels on
+  // the cards built from `data`. Both are read by the member and neither
+  // was collected, so an upload step showed a translated question above an
+  // English caption.
+  'caption', 'label', 'confirmLabel', 'heading', 'subtext',
+]);
 
 // Subtrees never to descend into. `url` is the link target (translating it
 // breaks the link) and `variableId`/`blockId`/`id` are flow identity.

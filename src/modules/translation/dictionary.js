@@ -66,6 +66,16 @@ const VARIABLE_PARTS = [
   // Exact entries are tried before templates, so "Communication address proof
   // (2)", which is a fixed heading that happens to end in a digit, still wins.
   /\d+(?=\))/g,
+  // A quoted span is the member's own data, not our wording: the work-details
+  // questions are built around the song they named - Is "Kabira" from a film or
+  // an album? - so one entry has to serve every song. Exact entries are matched
+  // before templates, so the fixed phrases that happen to quote a word, like
+  // ... or "Single" if there is none, are unaffected.
+  /"[^"]*"/g,
+  // "Please wait 25 seconds before requesting another OTP" - the count is the
+  // value; anchored on the word it counts so a stray number elsewhere in a
+  // sentence is not mistaken for one.
+  /\d+(?=\s+second)/g,
 ];
 
 function toTemplate(text) {

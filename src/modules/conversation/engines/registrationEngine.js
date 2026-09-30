@@ -1402,7 +1402,7 @@ async function handleUploadCore({ userId, token, file }) {
         textMessage(
           'ocr-extraction-failed',
           result.failureReason
-            ? `We couldn't verify this ${labelDocType} document: ${result.failureReason}`
+            ? `We couldn't verify this ${labelDocType} document:\n${result.failureReason}`
             : `We couldn't read this ${labelDocType} document clearly. Please upload a clearer, better-quality image.`,
         ),
       ],
