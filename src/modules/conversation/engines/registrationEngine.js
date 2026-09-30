@@ -111,6 +111,10 @@ export const OCR_FIELD_LABELS = {
     dob: 'Date of Birth',
     dateOfExpiry: 'Valid Till',
     nationality: 'Nationality',
+    // The reader returns this from the back page, and a passport is accepted as
+    // address proof - so leaving it off the card asked the member to confirm an
+    // address they were never shown.
+    address: 'Address',
   },
   //
   // Same caveat as PAN/DRIVING_LICENCE above - collection only documents "Bill name + address" for
