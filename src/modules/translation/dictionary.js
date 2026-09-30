@@ -10,32 +10,54 @@
 // Reviewed wording matters here: this flow states fees, legal warnings and
 // document requirements to people joining a rights society.
 //
-// The file is read once and kept in memory; it is a deployment artefact, so a
-// change to it means a restart, the same as any other config.
+// The file is kept in memory and re-read when it changes on disk. Wording is
+// edited from the admin panel by people who do not deploy, so requiring a
+// restart would have meant a correction sat unpublished until someone shipped.
+// The check is a stat per lookup batch, which costs nothing next to the reply
+// it is part of.
 // ==================================================================
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
 let entries = null;
+// What the cached copy was built from, so an edit on disk is noticed.
+let loadedFrom = null;
+// Declared here rather than beside loadReverse() because load() clears it when
+// the file changes underneath both.
+let reverse = null;
 
 function load() {
-  if (entries) return entries;
-
   const path = env.TRANSLATION_DICTIONARY_PATH;
   if (!path) {
-    entries = new Map();
+    entries = entries ?? new Map();
     return entries;
   }
+
+  // A file that cannot be stat'd keeps whatever is already in memory rather
+  // than emptying it: a half-written save must not blank every translation.
+  let mtimeMs = null;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    if (entries) return entries;
+  }
+
+  if (entries && loadedFrom?.path === path && loadedFrom?.mtimeMs === mtimeMs) return entries;
 
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
     entries = new Map(Object.entries(raw).map(([english, langs]) => [english.trim(), langs]));
+    loadedFrom = { path, mtimeMs };
+    // The reverse index is built from these entries, so it goes stale with them.
+    reverse = null;
     logger.info({ path, phrases: entries.size }, 'Loaded flow translation dictionary');
   } catch (err) {
-    // Missing or malformed: every member simply gets English.
-    logger.warn({ path, err: err.message }, 'Could not load translation dictionary, answering in English');
-    entries = new Map();
+    // Malformed after an edit: keep serving the copy already in memory rather
+    // than dropping every member back to English over one bad save.
+    logger.warn({ path, err: err.message }, 'Could not load translation dictionary, keeping the last good copy');
+    if (!entries) entries = new Map();
+    loadedFrom = { path, mtimeMs };
   }
 
   return entries;
@@ -195,8 +217,6 @@ function wholeString(text, language) {
 // sends back; Typebot only recognises its own English, and answers anything else
 // with "Invalid message. Please, try again." So the answer is turned back before
 // it reaches the flow.
-let reverse = null;
-
 function loadReverse() {
   if (reverse) return reverse;
 
