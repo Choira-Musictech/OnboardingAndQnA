@@ -10,6 +10,27 @@ import { Prisma } from '@prisma/client';
 import multer from 'multer';
 import { appError, validationError, notFoundError, conflictError, badRequestError } from './errors.js';
 import { logger } from '../utils/logger.js';
+import { resolveTargetLanguage } from '../modules/translation/translation.service.js';
+import { lookup } from '../modules/translation/dictionary.js';
+
+/**
+ * An operational error's message is shown to the member, not just logged: the
+ * web client puts error.message straight on screen. So it is answered in their
+ * language like every other message, from the same dictionary, by the same
+ * rules - a message with no entry is returned exactly as it is, which is what
+ * an English member gets anyway. Doing it here rather than at each throw site
+ * means a message added later is covered without anyone remembering to.
+ */
+function inMemberLanguage(message, req) {
+  if (typeof message !== 'string' || !message.trim()) return message;
+  try {
+    const language = resolveTargetLanguage(req?.headers?.['x-language']);
+    return language ? lookup(message, language) ?? message : message;
+  } catch {
+    // Never let the translator turn an error response into a second error.
+    return message;
+  }
+}
 
 function normalizeError(err) {
   if (err instanceof ZodError) {
@@ -70,7 +91,7 @@ export function errorHandler(err, req, res, next) {
       success: false,
       error: {
         code: normalized.errorCode || 'ERROR',
-        message: normalized.message || httpStatus.getStatusText(statusCode),
+        message: inMemberLanguage(normalized.message || httpStatus.getStatusText(statusCode), req),
       },
     };
     if (normalized.details) body.error.details = normalized.details;
@@ -83,7 +104,7 @@ export function errorHandler(err, req, res, next) {
   logger.error({ requestId, err: normalized }, 'Unhandled error');
   return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({
     success: false,
-    error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+    error: { code: 'INTERNAL_ERROR', message: inMemberLanguage('Internal server error', req) },
   });
 }
 
