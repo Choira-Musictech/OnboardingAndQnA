@@ -22,6 +22,9 @@ const TRANSLATABLE_KEYS = new Set([
   // was collected, so an upload step showed a translated question above an
   // English caption.
   'caption', 'label', 'confirmLabel', 'heading', 'subtext',
+  // The AI engine answers with { reply } rather than a messages array, so its
+  // line reached every member in English whatever language they had chosen.
+  'reply',
 ]);
 
 // Subtrees never to descend into. `url` is the link target (translating it
