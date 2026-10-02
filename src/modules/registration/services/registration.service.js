@@ -180,6 +180,24 @@ async function resolveAndPersistBookId(registrationId) {
 // address string. Indian PIN codes are 6 digits, first digit 1-9, and sit at the end of a full
 // address, so take the LAST standalone match rather than the first (a house/flat number earlier in
 // the string could otherwise be mistaken for one).
+/**
+ * The pincode the reader itself answered with, when it is one.
+ *
+ * Every document type returns this field, and for several it is better than
+ * anything derivable from the address: the letter-shaped documents search the
+ * whole page, so they find a code printed in a letterhead or beside a seal that
+ * the address line never carries. One member's address read as "ROOM NO 3
+ * SAWANT CHAWL ... Thane" with no code in it at all.
+ *
+ * Checked rather than trusted. It comes from a recogniser, and shape is the
+ * only thing separating a pincode from any other six digits on the page - so
+ * the same rule the local extractor uses is applied to it.
+ */
+function readerPincode(value) {
+  const digits = String(value ?? '').trim();
+  return /^[1-9]\d{5}$/.test(digits) ? digits : null;
+}
+
 function extractPincode(address) {
   if (typeof address !== 'string') return null;
   const matches = address.match(/\b[1-9]\d{5}\b/g);
@@ -659,7 +677,9 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     const addressColumn = ADDRESS_COLUMN_BY_SLOT[addressSlot];
     if (extracted.address && addressColumn) {
       const addressUpdate = { [addressColumn]: extracted.address };
-      const pincode = extractPincode(extracted.address);
+      // The reader's own answer first; the address is the fallback, which is all
+      // the document types that derive it from the address had anyway.
+      const pincode = readerPincode(extracted.pincode) ?? extractPincode(extracted.address);
       if (pincode) addressUpdate[PINCODE_COLUMN_BY_ADDRESS_COLUMN[addressColumn]] = pincode;
       await registrationRepository.update(registrationId, addressUpdate);
       // Most members fill the permanent address via a document upload (this branch), not the
