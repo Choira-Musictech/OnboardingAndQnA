@@ -3,8 +3,6 @@
 // Later milestone: connects the RAG / LLM pipeline (AI chatbot).
 // For now returns a deterministic dummy response.
 // ==================================================================
-import { env } from '../../../config/env.js';
-
 /**
  * @param {{ userId: string, message: string }} input
  * @returns {Promise<{ reply: string }>}
@@ -18,20 +16,9 @@ export async function handle(input) {
   // real message means they are still in the session where they finished.
   const returning = input?.message === undefined;
 
-  // A fresh login landing on an already-completed registration gets the same
-  // "you're done" card payment.service.js's registrationCompleteMessage() shows right
-  // after payment - Application Number (the account's own id) and the IPRS Email ID,
-  // so logging back in later still tells the member what they need to quote/write to.
-  if (returning) {
-    const contact = env.SUPPORT_CONTACT?.trim();
-    const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
-    return {
-      reply:
-        `Thank You for Registration!\n\n` +
-        `Application Number: ${input.userId}${emailLine}\n\n` +
-        `You will receive a confirmation email from the IPRS team.`,
-    };
-  }
-
-  return { reply: 'Your registration is complete. Thank you!' };
+  return {
+    reply: returning
+      ? 'Your registration is already complete. Thank you!'
+      : 'Your registration is complete. Thank you!',
+  };
 }

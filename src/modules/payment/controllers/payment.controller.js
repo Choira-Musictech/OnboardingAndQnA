@@ -4,9 +4,6 @@
 import { ok } from '../../../shared/response.js';
 import { env } from '../../../config/env.js';
 import { paymentService, PAYMENT_STATUS } from '../services/payment.service.js';
-import { translationService } from '../../translation/translation.service.js';
-
-const languageOf = (req) => req.headers['x-language'];
 
 export const initiate = async (req, res, next) => {
   try {
@@ -61,7 +58,7 @@ export const verifyStatus = async (req, res, next) => {
       userId: req.user.id,
       txnId: req.body.txnId,
     });
-    return ok(res, { data: await translationService.translateConversationPayload(data, languageOf(req)) });
+    return ok(res, { data });
   } catch (err) {
     return next(err);
   }
@@ -73,7 +70,7 @@ export const getStatus = async (req, res, next) => {
       userId: req.user.id,
       txnId: req.params.txnId,
     });
-    return ok(res, { data: await translationService.translateConversationPayload(data, languageOf(req)) });
+    return ok(res, { data });
   } catch (err) {
     return next(err);
   }
