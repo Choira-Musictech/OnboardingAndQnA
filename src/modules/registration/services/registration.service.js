@@ -729,7 +729,16 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     );
     // Surfaces the OCR service's own message (e.g. a wrong-document-type or low-confidence reason)
     // up to the user-facing failure text in registrationEngine.js, instead of only a generic one.
-    return { verified: false, extracted: null, failureReason: err.errorCode ? err.message || null : null };
+    // failureOcr is the same refusal in machine-readable form. The message above
+    // is the OCR service's English, which is composed at runtime and so matches
+    // no dictionary entry; the translator rebuilds the sentence from this instead.
+    // See modules/translation/ocrMessages.js.
+    return {
+      verified: false,
+      extracted: null,
+      failureReason: err.errorCode ? err.message || null : null,
+      failureOcr: err.details?.ocr ?? null,
+    };
   }
 }
 

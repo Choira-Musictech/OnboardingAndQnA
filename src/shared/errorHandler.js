@@ -12,6 +12,7 @@ import { appError, validationError, notFoundError, conflictError, badRequestErro
 import { logger } from '../utils/logger.js';
 import { resolveTargetLanguage } from '../modules/translation/translation.service.js';
 import { lookup } from '../modules/translation/dictionary.js';
+import { composeOcrMessage } from '../modules/translation/ocrMessages.js';
 
 /**
  * An operational error's message is shown to the member, not just logged: the
@@ -21,11 +22,18 @@ import { lookup } from '../modules/translation/dictionary.js';
  * an English member gets anyway. Doing it here rather than at each throw site
  * means a message added later is covered without anyone remembering to.
  */
-function inMemberLanguage(message, req) {
+function inMemberLanguage(message, req, details) {
   if (typeof message !== 'string' || !message.trim()) return message;
   try {
     const language = resolveTargetLanguage(req?.headers?.['x-language']);
-    return language ? lookup(message, language) ?? message : message;
+    if (!language) return message;
+    // An OCR refusal is rebuilt from its code rather than looked up by its
+    // English. That service composes its sentences at runtime from a document
+    // name, so there are hundreds of them and not one is a dictionary key.
+    // See modules/translation/ocrMessages.js.
+    const composed = composeOcrMessage(details?.ocr, language);
+    if (composed) return composed;
+    return lookup(message, language) ?? message;
   } catch {
     // Never let the translator turn an error response into a second error.
     return message;
@@ -91,7 +99,11 @@ export function errorHandler(err, req, res, next) {
       success: false,
       error: {
         code: normalized.errorCode || 'ERROR',
-        message: inMemberLanguage(normalized.message || httpStatus.getStatusText(statusCode), req),
+        message: inMemberLanguage(
+          normalized.message || httpStatus.getStatusText(statusCode),
+          req,
+          normalized.details,
+        ),
       },
     };
     if (normalized.details) body.error.details = normalized.details;

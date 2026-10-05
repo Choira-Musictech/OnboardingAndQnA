@@ -29,7 +29,7 @@ const TRANSLATABLE_KEYS = new Set([
 
 // Subtrees never to descend into. `url` is the link target (translating it
 // breaks the link) and `variableId`/`blockId`/`id` are flow identity.
-const SKIP_KEYS = new Set(['url', 'variableId', 'blockId', 'id', 'type', 'sessionId']);
+const SKIP_KEYS = new Set(['url', 'variableId', 'blockId', 'id', 'type', 'sessionId', 'ocrFailure']);
 
 function isTranslatable(key, value) {
   return typeof value === 'string' && TRANSLATABLE_KEYS.has(key) && value.trim().length > 0;

@@ -151,11 +151,12 @@ const SAME_AS_ADDRESS_BLOCK_IDS = new Set([
   'cbmqojadjfm2jmbk9c17a59q',
 ]);
 
-function textMessage(id, text) {
+function textMessage(id, text, extra) {
   return {
     id,
     type: 'text',
     content: { type: 'richText', richText: [{ type: 'p', children: [{ text }] }] },
+    ...(extra ?? {}),
   };
 }
 
@@ -1424,6 +1425,10 @@ async function handleUploadCore({ userId, token, file }) {
           result.failureReason
             ? `We couldn't verify this ${labelDocType} document:\n${result.failureReason}`
             : `We couldn't read this ${labelDocType} document clearly. Please upload a clearer, better-quality image.`,
+          // The English above is what an English member reads. For everyone else
+          // the translator rebuilds this bubble from the code, because the OCR
+          // service composes its sentences and none of them is a dictionary key.
+          result.failureOcr ? { ocrFailure: result.failureOcr } : undefined,
         ),
       ],
       input: session.input,
