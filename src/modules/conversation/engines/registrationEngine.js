@@ -469,6 +469,18 @@ async function resumeFromJournal({ userId, token }) {
 
   logger.info({ userId, replayed, total: turns.length, stop }, 'Resumed a registration from its journal');
 
+  // handle() normally sets session.addressProofOcrType live when the member answers the paired
+  // "what type of document is this?" question (see line ~1181 below) - replay never calls handle(),
+  // so without reconstructing it here, a member who logs out before uploading their address proof
+  // loses OCR entirely on resume (see addressProofTypeMap.js). Scoped to what was actually replayed,
+  // and only the last match wins, mirroring the live path's single mutable field.
+  let addressProofOcrType;
+  for (const turn of turns.slice(0, replayed)) {
+    if (isAddressProofTypeStep(turn.variableId)) {
+      addressProofOcrType = resolveAddressProofOcrType(turn.answer);
+    }
+  }
+
   // Replay ran the flow to its end - they had actually finished, so treat this exactly as the relay
   // does when it runs out of questions.
   if (!response.input) {
@@ -484,7 +496,11 @@ async function resumeFromJournal({ userId, token }) {
     return { sessionEnded: true, messages: response.messages ?? [], input: null, progress: 100 };
   }
 
-  typebotSessionStore.set(userId, { sessionId: startResponse.sessionId, input: response.input });
+  typebotSessionStore.set(userId, {
+    sessionId: startResponse.sessionId,
+    input: response.input,
+    ...(addressProofOcrType !== undefined ? { addressProofOcrType } : {}),
+  });
 
   const notice = stop === REPLAY_STOP.COMPLETE ? describeResumed() : describeResumedPartially();
 
