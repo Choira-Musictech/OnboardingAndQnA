@@ -306,55 +306,62 @@ function stubReplay(blockIds) {
   };
 }
 
-test('resuming shows a summary of what was already told, read from the database', async (t) => {
-  if (!dbAvailable) return t.skip('SQL Server is not reachable');
-  const userId = await makeAccount();
+test('replay returns the conversation so far, each question followed by the answer given to it', async () => {
+  const bubble = (id, text) => ({ id, type: 'text', content: { type: 'richText', richText: [{ type: 'p', children: [{ text }] }] } });
+  const real = typebotClient.continueChat;
+  const replies = {
+    'Alice': { input: { id: 'b2' }, messages: [bubble('m2', 'And your city?')] },
+    'Pune': { input: { id: 'b3' }, messages: [bubble('m3', 'Upload your PAN')] },
+  };
+  typebotClient.continueChat = async ({ message }) => replies[message.text];
 
-  // These are exactly what saveConversationField would have written on the member's first visit -
-  // buildReview() reads them straight from App_Accounts, not from anything journalled.
-  await prisma.appAccounts.update({
-    where: { AccountId: BigInt(userId) },
-    data: {
-      AccountEmail: 'resume-test@example.com',
-      PlaceOfBirth: 'Banaras',
-      RollTypeIds: '2,1', // Both
-      AccountRegType: 'I',
-    },
-  });
+  try {
+    const { response, transcript } = await conversationJournalService.replayJournal({
+      sessionId: 's',
+      startResponse: { input: { id: 'b1' }, messages: [bubble('m1', 'Your name?')] },
+      turns: [
+        { turnIndex: 1, blockId: 'b1', answer: 'Alice' },
+        { turnIndex: 2, blockId: 'b2', answer: 'Pune' },
+      ],
+    });
 
-  for (const blockId of ['b1', 'b2', 'b3']) {
-    await conversationJournalService.recordTurn({ userId, blockId, answer: 'x' });
+    assert.deepEqual(
+      transcript.map((e) => (e.sender === 'user' ? `user:${e.answer}` : `bot:${e.id}`)),
+      ['bot:m1', 'user:Alice', 'bot:m2', 'user:Pune'],
+    );
+    // The question the member is on now is the live response, not part of the history.
+    assert.equal(response.input.id, 'b3');
+    assert.equal(transcript.some((e) => e.id === 'm3'), false);
+  } finally {
+    typebotClient.continueChat = real;
   }
-
-  const restoreClient = stubReplay(['b1', 'b2', 'b3', 'b4']);
-  t.after(restoreClient);
-
-  const offer = await handle({ userId, token: 't' });
-  assert.equal(offer.input?.id, 'resume-registration', 'a returning member is offered the choice first');
-
-  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
-
-  assert.match(texts(resumed), /Here's what you told us earlier/);
-  assert.match(texts(resumed), /Email: resume-test@example\.com/);
-  assert.match(texts(resumed), /Place of birth: Banaras/);
-  assert.match(texts(resumed), /Applying as: \(Individual\) Author \/ Composer/);
-  assert.match(texts(resumed), /Role: Both/);
-  assert.match(texts(resumed), /Picking up where you left off/, "Typebot's own next question still follows");
-  assert.equal(resumed.input?.id, 'b4');
 });
 
-test('conversation-only turns never fabricate a summary line that was not actually answered', async (t) => {
-  if (!dbAvailable) return t.skip('SQL Server is not reachable');
-  // makeAccount() always sets AccountMobile (that's how login works, before any chat question is
-  // answered), and buildReview() lists it under "Your details" - so the summary is never LITERALLY
-  // empty for a real member. What must hold is narrower: nothing the member never actually answered
-  // shows up as if it had been.
-  const userId = await makeAccount();
+test('a failed replay turn leaves its question live instead of duplicating it in the history', async () => {
+  const bubble = (id, text) => ({ id, type: 'text', content: { type: 'richText', richText: [{ type: 'p', children: [{ text }] }] } });
+  const real = typebotClient.continueChat;
+  typebotClient.continueChat = async () => {
+    throw new Error('typebot down');
+  };
 
-  // Pure navigation choices - "Yes", "I Accept" - carry no variableId, so nothing beyond the
-  // pre-existing mobile number was ever persisted to a labelled column.
+  try {
+    const { transcript, stop } = await conversationJournalService.replayJournal({
+      sessionId: 's',
+      startResponse: { input: { id: 'b1' }, messages: [bubble('m1', 'Your name?')] },
+      turns: [{ turnIndex: 1, blockId: 'b1', answer: 'Alice' }],
+    });
+    assert.equal(stop, 'failed');
+    assert.deepEqual(transcript, []);
+  } finally {
+    typebotClient.continueChat = real;
+  }
+});
+
+test('resuming hands back the replayed chat as history and no longer shows a summary card', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
   for (const blockId of ['b1', 'b2']) {
-    await conversationJournalService.recordTurn({ userId, blockId, answer: 'x' });
+    await conversationJournalService.recordTurn({ userId, blockId, answer: `answer-${blockId}` });
   }
 
   const restoreClient = stubReplay(['b1', 'b2', 'b3']);
@@ -363,69 +370,13 @@ test('conversation-only turns never fabricate a summary line that was not actual
   await handle({ userId, token: 't' });
   const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
 
-  assert.match(texts(resumed), /Here's what you told us earlier/, 'the account has a mobile number on file');
-  assert.match(texts(resumed), /Mobile:/);
-  for (const label of ['Email:', 'Stage name:', 'Place of birth:', 'Applying as:']) {
-    assert.equal(texts(resumed).includes(label), false, `${label} was never answered and must not appear`);
-  }
-  assert.match(texts(resumed), /Picking up where you left off/);
+  assert.equal(resumed.input?.id, 'b3');
+  assert.deepEqual(
+    resumed.history.filter((e) => e.sender === 'user').map((e) => e.answer),
+    ['answer-b1', 'answer-b2'],
+  );
+  assert.equal(/Here's what you told us earlier|Picking up where you left off/.test(texts(resumed)), false);
 });
-
-test('an empty review is not rendered as an empty summary block', async (t) => {
-  if (!dbAvailable) return t.skip('SQL Server is not reachable');
-  // Stubbed rather than found naturally, since a real account always has at least Mobile (see
-  // above) - this pins the `sections.length` guard itself: buildReview() returning `[]` must mean
-  // no summary message at all, not a "Here's what you told us earlier:" with nothing under it.
-  const userId = await makeAccount();
-  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
-
-  const realBuildReview = registrationReviewService.buildReview;
-  registrationReviewService.buildReview = async () => [];
-  const restoreClient = stubReplay(['b1', 'b2']);
-  t.after(() => {
-    restoreClient();
-    registrationReviewService.buildReview = realBuildReview;
-  });
-
-  await handle({ userId, token: 't' });
-  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
-
-  assert.equal(/Here's what you told us earlier/.test(texts(resumed)), false);
-  assert.match(texts(resumed), /Picking up where you left off/);
-});
-
-test('a summary that fails to build never blocks the resume itself', async (t) => {
-  if (!dbAvailable) return t.skip('SQL Server is not reachable');
-  const userId = await makeAccount();
-  await prisma.appAccounts.update({ where: { AccountId: BigInt(userId) }, data: { AccountEmail: 'x@example.com' } });
-  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
-
-  const realBuildReview = registrationReviewService.buildReview;
-  registrationReviewService.buildReview = async () => {
-    throw new Error('review service is down');
-  };
-  const restoreClient = stubReplay(['b1', 'b2']);
-  t.after(() => {
-    restoreClient();
-    registrationReviewService.buildReview = realBuildReview;
-  });
-
-  await handle({ userId, token: 't' });
-  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
-
-  // The member still lands on the right question - a broken summary degrades gracefully, exactly
-  // like every other "must never block the member" path in this engine.
-  assert.equal(resumed.input?.id, 'b2');
-  assert.match(texts(resumed), /Picking up where you left off/);
-});
-
-// --- "Start over" also clears previously saved work links -------------------
-//
-// Work links are append-only with a hard cap (MAX_WORK_LINKS in workLink.service.js), unlike
-// documents or account fields. A tester found that restarting and adding just one new song still
-// counted "2 of 5 links" and showed the old song too - because the original "Start over" only
-// cleared the journal and the Typebot session, never App_Accounts_WorkRegistration. See
-// registrationEngine.js's choosesRestart branch.
 
 test('"Start over" clears previously saved work links, not just the journal', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');

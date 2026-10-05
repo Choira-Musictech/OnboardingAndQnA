@@ -46,7 +46,7 @@ import {
   describePaymentReceived,
 } from '../services/typebot/paymentGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
-import { registrationReviewService, renderSections } from '../../registration/services/registrationReview.service.js';
+import { registrationReviewService } from '../../registration/services/registrationReview.service.js';
 import { resolveProgress } from '../services/typebot/progressMap.js';
 import {
   isEmailStep,
@@ -260,28 +260,10 @@ function describeResumeOffer(percent) {
   return `Welcome back! You have a registration already in progress.${sofar}\n\nWould you like to carry on from where you left off, or start over?`;
 }
 
-// Replay put the member back mid-flow, so the question they now see is not the one they remember
-// answering last - say why before Typebot's own message.
-//
-// Deliberately carries no percentage. The offer above quotes how far they GOT (the last block they
-// answered); by here the flow has moved on to the next question, which scores slightly higher - and
-// two different numbers a second apart reads as a bug. The live `progress` field still carries it.
-function describeResumed() {
-  return "Picking up where you left off. Here's the next question.";
-}
-
 // The published flow changed since they were last here, so their answers stop matching partway.
 // Everything already saved is untouched; they just re-answer from the point the flow diverged.
 function describeResumedPartially() {
   return "We've restored as much of your earlier registration as we could. Some questions have changed since you were last here, so we'll need a few answers again from this point.";
-}
-
-// What buildReview() found on file, worded for a member picking a conversation back up rather than
-// about to pay. Only named/mapped fields - the same ones the payment review shows - not raw journal
-// turns like "I Accept". `sections` is already empty-filtered by buildReview(), so nothing here
-// decides what to include.
-function describeResumeSummary(sections) {
-  return `Here's what you told us earlier:\n\n${renderSections(sections)}`;
 }
 
 // Hold the conversation on the work-link step and ask again. Typebot is never advanced, so the
@@ -455,7 +437,7 @@ async function resumeFromJournal({ userId, token }) {
     prefilledVariables: { token, registrationId: userId },
   });
 
-  const { response, replayed, stop } = await conversationJournalService.replayJournal({
+  const { response, replayed, stop, transcript } = await conversationJournalService.replayJournal({
     sessionId: startResponse.sessionId,
     startResponse,
     turns,
@@ -486,26 +468,14 @@ async function resumeFromJournal({ userId, token }) {
 
   typebotSessionStore.set(userId, { sessionId: startResponse.sessionId, input: response.input });
 
-  const notice = stop === REPLAY_STOP.COMPLETE ? describeResumed() : describeResumedPartially();
-
-  // Reminds the member what they already told us, before the "picking up" notice. Read straight
-  // from the database, not the journal: those fields were persisted the first time the member
-  // answered them, and replay above never re-writes them, so this is already correct without
-  // re-deriving anything from the journal's raw turns. A summary must never block the resume
-  // itself - buildReview() failing is a lesser problem than the member being stuck.
-  let summaryMessage = null;
-  try {
-    const sections = await registrationReviewService.buildReview(userId);
-    if (sections.length) summaryMessage = textMessage('resume-summary', describeResumeSummary(sections));
-  } catch (err) {
-    logger.warn({ userId, err }, 'Could not build the resume summary, continuing without it');
-  }
-
+  // A clean replay needs no explanation: the member sees their own conversation redrawn from the
+  // top (`history`) with the next question under it, exactly as if they had never left. Only a
+  // partial restore says anything, because the questions really did change under them.
   return {
     sessionEnded: false,
+    history: transcript,
     messages: [
-      ...(summaryMessage ? [summaryMessage] : []),
-      textMessage('resume-restored', notice),
+      ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
       ...(response.messages ?? []),
     ],
     input: response.input,
