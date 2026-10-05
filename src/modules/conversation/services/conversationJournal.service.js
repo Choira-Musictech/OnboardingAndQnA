@@ -65,6 +65,7 @@ async function loadJournal(userId) {
   return rows.map((row) => ({
     turnIndex: row.TurnIndex,
     blockId: row.BlockId,
+    variableId: row.VariableId,
     answer: row.Answer ?? '',
     attachedFileUrls: toAttachedUrls(row.AttachedUrls),
   }));
