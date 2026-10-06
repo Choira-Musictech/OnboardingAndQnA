@@ -3,7 +3,7 @@
 // Later milestone: connects the RAG / LLM pipeline (AI chatbot).
 // For now returns a deterministic dummy response.
 // ==================================================================
-import { env } from '../../../config/env.js';
+import { paymentService } from '../../payment/services/payment.service.js';
 
 /**
  * @param {{ userId: string, message: string }} input
@@ -18,19 +18,14 @@ export async function handle(input) {
   // real message means they are still in the session where they finished.
   const returning = input?.message === undefined;
 
-  // A fresh login landing on an already-completed registration gets the same
-  // "you're done" card payment.service.js's registrationCompleteMessage() shows right
-  // after payment - Application Number (the account's own id) and the IPRS Email ID,
-  // so logging back in later still tells the member what they need to quote/write to.
+  // A fresh login landing on an already-completed registration gets the same "you're done" card
+  // payment.service.js shows right after payment - Application Number and the IPRS Email ID - but
+  // only if the member hasn't already been shown it (registrationCompleteText() is guarded to fire
+  // once per account, so a payment-status poll and a relogin landing in the same page view, or a
+  // member logging back in again later, never produce two copies of the card).
   if (returning) {
-    const contact = env.SUPPORT_CONTACT?.trim();
-    const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
-    return {
-      reply:
-        `Thank You for Registration!\n\n` +
-        `Application Number: ${input.userId}${emailLine}\n\n` +
-        `You will receive a confirmation email from the IPRS team.`,
-    };
+    const text = paymentService.registrationCompleteText(input.userId);
+    if (text) return { reply: text };
   }
 
   return { reply: 'Your registration is complete. Thank you!' };
