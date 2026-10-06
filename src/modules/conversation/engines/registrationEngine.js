@@ -47,6 +47,7 @@ import {
 } from '../services/typebot/paymentGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
 import { registrationReviewService, renderSections } from '../../registration/services/registrationReview.service.js';
+import { documentStorageService } from '../../registration/services/documentStorage.service.js';
 import { resolveProgress } from '../services/typebot/progressMap.js';
 import {
   isEmailStep,
@@ -1375,6 +1376,22 @@ async function handleUploadCore({ userId, token, file }) {
   let result = null;
   if (docType) {
     result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
+
+    // After saveDocument() on purpose: the folder copy then always matches the DB row, and a PAN
+    // whose OCR just wrote AccountName renames the member's folder in this same request.
+    // Best-effort - a full disk must never cost the member an upload that already succeeded.
+    try {
+      await documentStorageService.saveMemberDocument({
+        accountId: userId,
+        docType,
+        addressProofType: ocrDocType ?? null,
+        buffer: file.buffer,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+      });
+    } catch (err) {
+      logger.warn({ userId, docType, err }, 'Could not save the local copy of the document, continuing');
+    }
   }
 
   // OCR was attempted (result carries an `extracted` key, even if null) -

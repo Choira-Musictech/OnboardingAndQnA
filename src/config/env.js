@@ -154,6 +154,9 @@ const envSchema = z.object({
   TYPEBOT_API_TOKEN: z.string().optional(),
   TYPEBOT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
+  // Where each member's uploads are also copied, one folder per member (see
+  // documentStorage.service.js). Blank turns the copy off.
+  DOCUMENT_STORAGE_DIR: z.string().default('uploads/member-documents'),
 
   /* PayU Payment Gateway */
   PAYU_KEY: z.string().optional().default('test_key'),
