@@ -23,6 +23,7 @@ import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { typebotClient } from '../src/modules/conversation/services/typebot/typebotClient.js';
 import { registrationService } from '../src/modules/registration/services/registration.service.js';
+import { documentStorageService } from '../src/modules/registration/services/documentStorage.service.js';
 import { typebotSessionStore } from '../src/modules/conversation/services/typebot/typebotSessionStore.js';
 import { handle, handleUpload } from '../src/modules/conversation/engines/registrationEngine.js';
 import { prisma } from '../src/shared/prisma.js';
@@ -60,6 +61,8 @@ function stubUploadPlumbing() {
     return { presignedUrl: 'https://s3/presigned', formData: {}, fileUrl: `https://s3/file-${uploadCount}.jpg` };
   };
   typebotClient.uploadToPresignedUrl = async () => {};
+  // Otherwise every run writes this fake member's file into the real DOCUMENT_STORAGE_DIR.
+  documentStorageService.saveMemberDocument = async () => null;
 }
 
 const FILE = { originalname: 'bill.jpg', mimetype: 'image/jpeg', size: 1000, buffer: Buffer.from('x') };
