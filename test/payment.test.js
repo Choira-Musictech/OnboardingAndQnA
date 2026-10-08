@@ -8,6 +8,11 @@ import {
   generateVerifyPaymentHash,
 } from '../src/modules/payment/services/payu/payu.utils.js';
 import { resolveFee, FEES_BY_REG_TYPE } from '../src/modules/payment/services/payu/feeSchedule.js';
+import { registrationEmailService } from '../src/modules/registration/services/registrationEmail.service.js';
+
+// The DB-backed tests below complete real registrations, and complete() emails IPRS and the member
+// on the first transition - a test run must never send real mail.
+registrationEmailService.sendCompletionEmails = async () => {};
 
 async function makeAccount({ regType, email, name = 'PayU Tester' } = {}) {
   const { prisma } = await import('../src/shared/prisma.js');

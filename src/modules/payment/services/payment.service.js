@@ -45,9 +45,8 @@ function generateTxnId(userId) {
 
 // The one-time "you're done" card, shown as a normal chat bubble once registration is genuinely
 // complete (not just paid-for - see the two call sites below). AccountId doubles as the
-// "Application Number" here, same identifier paymentGate.js's describePaymentReceived() already
-// calls "your registration number"; IPRS Email ID is the same org-wide support address members
-// are already told to write to, not a per-member mailbox (nothing like that exists in this app).
+// "Application Number" here; IPRS Email ID is the same org-wide support address members are
+// already told to write to, not a per-member mailbox (nothing like that exists in this app).
 //
 // Shown once per account, ever (this process's lifetime) - guards against the same card appearing
 // twice back-to-back when more than one code path reaches "registration is complete" for the same
@@ -62,8 +61,17 @@ function registrationCompleteText(registrationId) {
   return (
     `Thank You for Registration!\n\n` +
     `Application Number: ${registrationId}${emailLine}\n\n` +
-    `You will receive a confirmation email from the IPRS team.`
+    `We have sent you a confirmation email from the IPRS team.`
   );
+}
+
+// Shown on every relogin after the one-time card above has already been shown once - same
+// Application Number / IPRS Email ID block, no once-only guard, and no confirmation-email line
+// (the member was already told that right after paying).
+function welcomeBackText(registrationId) {
+  const contact = env.SUPPORT_CONTACT?.trim();
+  const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
+  return `Welcome back! Your IPRS registration is complete.\n\nApplication Number: ${registrationId}${emailLine}`;
 }
 
 function registrationCompleteMessage(registrationId) {
@@ -417,6 +425,7 @@ export const paymentService = {
   getPaymentHistory,
   hasSuccessfulPayment,
   registrationCompleteText,
+  welcomeBackText,
   PAYMENT_STATUS,
   toPublic,
 };

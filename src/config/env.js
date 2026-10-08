@@ -53,6 +53,9 @@ const envSchema = z.object({
   // Shown at the pre-payment review when the member says something needs correcting. Optional:
   // blank falls back to "our team will get in touch" rather than printing an empty contact line.
   SUPPORT_CONTACT: z.string().optional(),
+  // Receives the "Successful Registration" notice when a member completes. Blank skips that mail
+  // (the member still gets theirs).
+  IPRS_MEMBERSHIP_EMAIL: z.string().optional(),
 
   SPOTIFY_CLIENT_ID: z.string().optional(),
   SPOTIFY_CLIENT_SECRET: z.string().optional(),

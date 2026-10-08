@@ -20,11 +20,27 @@ function findByAccountEmail(email) {
   });
 }
 
-function markCompleted(accountId) {
-  return prisma.appAccounts.update({
-    where: { AccountId: BigInt(accountId) },
+// True only for the call that actually moved the account into the completed state. Conditional,
+// so two complete() calls racing (PayU callback + status check) can't both win. NULL is listed
+// explicitly because SQL's <> 1 does not match a NULL ApplicationStatus.
+async function markCompleted(accountId) {
+  const { count } = await prisma.appAccounts.updateMany({
+    where: {
+      AccountId: BigInt(accountId),
+      OR: [{ ApplicationStatus: null }, { ApplicationStatus: { not: 1 } }],
+    },
     data: { ApplicationStatus: 1, Detail10: 'choira', RecordStatus: 1 },
   });
+  return count === 1;
+}
+
+async function findBookName(bookId) {
+  if (bookId == null) return null;
+  const book = await prisma.appBookMaster.findUnique({
+    where: { BookID: BigInt(bookId) },
+    select: { BookName: true },
+  });
+  return book?.BookName ?? null;
 }
 
 function update(accountId, data) {
@@ -80,6 +96,7 @@ export const registrationRepository = {
   findByAccountId,
   findByAccountEmail,
   markCompleted,
+  findBookName,
   update,
   upsertDocument,
   findDocumentsByAccountId,

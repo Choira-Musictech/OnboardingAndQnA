@@ -102,18 +102,21 @@ export function describeEntityType(entityType) {
   return ANSWER_BY_ENTITY_TYPE[String(entityType ?? '').trim()] ?? null;
 }
 
+/** Stored ids -> each role's name, de-duplicated ("2,1" -> ["Lyricist", "Composer"]). */
+export function listRoleLabels(rollTypeIds) {
+  const ids = String(rollTypeIds ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return [...new Set(ids.map((id) => ROLE_LABEL_BY_ID[id]).filter(Boolean))];
+}
+
 /**
  * Stored ids -> the wording the member picked ("Lyricist"/"Composer"/"Both"/"Publisher").
  * A member must never be shown the raw "2,1".
  */
 export function describeRollTypeIds(rollTypeIds) {
-  const ids = String(rollTypeIds ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-  if (!ids.length) return null;
-
-  const labels = [...new Set(ids.map((id) => ROLE_LABEL_BY_ID[id]).filter(Boolean))];
+  const labels = listRoleLabels(rollTypeIds);
   if (!labels.length) return null;
   // Lyricist + Composer together is the flow's own "Both" answer - say it the way they said it.
   if (labels.includes('Lyricist') && labels.includes('Composer')) return 'Both';
