@@ -244,7 +244,9 @@ export function composeOcrMessage(ocr, language) {
 
   const values = {
     friendly: expected,
-    expected: isHolderType ? say('PAN card', language) : expected,
+    // 'PAN', not 'PAN card' - the OCR service's own holder-type wording never says "card", and
+    // the dictionary's "PAN" entry is deliberately left untranslated in every language.
+    expected: isHolderType ? say('PAN', language) : expected,
     detected: isHolderType ? say(detectedHolderEnglish, language) : detected,
     fields,
     wanted: say(wantedEnglish, language),

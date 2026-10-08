@@ -18,6 +18,7 @@ import {
 } from './memberRoleCodes.js';
 import { languageLookupService } from './languageLookup.service.js';
 import { DOC_LOOKUP_ID_BY_PATH } from './documentLookupMap.js';
+import { registrationEmailService } from './registrationEmail.service.js';
 
 const REGISTERED = 1;
 const DOC_TYPES = Object.freeze({
@@ -786,7 +787,15 @@ async function complete(userId, registrationId) {
     await registrationRepository.update(registrationId, { TeritoryAppFor: 'WORLD' });
   }
 
-  const updated = account.ApplicationStatus === REGISTERED ? account : await registrationRepository.markCompleted(registrationId);
+  let updated = account;
+  if (account.ApplicationStatus !== REGISTERED) {
+    // complete() is reached from five places, two of which can race on one payment, so only the
+    // call whose conditional update actually flipped the status sends the emails. Not awaited:
+    // a slow SMTP server must not hold up the member's chat or payment response.
+    const firstTime = await registrationRepository.markCompleted(registrationId);
+    updated = await registrationRepository.findByAccountId(registrationId);
+    if (firstTime) registrationEmailService.sendCompletionEmails(updated);
+  }
   return toPublic(updated);
 }
 

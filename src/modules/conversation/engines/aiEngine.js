@@ -18,14 +18,14 @@ export async function handle(input) {
   // real message means they are still in the session where they finished.
   const returning = input?.message === undefined;
 
-  // A fresh login landing on an already-completed registration gets the same "you're done" card
-  // payment.service.js shows right after payment - Application Number and the IPRS Email ID - but
-  // only if the member hasn't already been shown it (registrationCompleteText() is guarded to fire
-  // once per account, so a payment-status poll and a relogin landing in the same page view, or a
-  // member logging back in again later, never produce two copies of the card).
+  // A fresh login landing on an already-completed registration gets the payment.service.js
+  // "thank you for the payment" message if it hasn't been shown yet (registrationCompleteText() is
+  // guarded to fire once per account, so a payment-status poll and the chat reload after paying
+  // never produce two copies). Every later login gets a welcome back instead.
   if (returning) {
     const text = paymentService.registrationCompleteText(input.userId);
     if (text) return { reply: text };
+    return { reply: paymentService.welcomeBackText(input.userId) };
   }
 
   return { reply: 'Your registration is complete. Thank you!' };

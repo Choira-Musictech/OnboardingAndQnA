@@ -193,3 +193,16 @@ test('a holder type resolves from either the code or the word', () => {
     null,
   );
 });
+
+// "PAN" is deliberately left untranslated in every language (the user's explicit instruction) -
+// only the surrounding wording changes. A holder-type mismatch is the one template that names
+// "PAN" directly (not through a translated document name), so it's the one place this could slip.
+test('a PAN holder-type mismatch keeps the word "PAN" literal in every language', () => {
+  const ocr = { code: 'WRONG_HOLDER_TYPE', detectedHolderType: 'C', expectedHolderType: 'p' };
+  for (const language of LANGUAGES) {
+    const message = composeOcrMessage(ocr, language);
+    assert.ok(message, `no message for ${language}`);
+    assert.match(message, /PAN/, `${language}: "PAN" was translated away: ${message}`);
+    assert.doesNotMatch(message, /PAN card/, `${language}: should say "PAN", not "PAN card"`);
+  }
+});
