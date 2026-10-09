@@ -15,6 +15,7 @@ import {
   resolveEntityType,
   resolveRegType,
   resolveRollTypeIds,
+  listRoleLabels,
 } from './memberRoleCodes.js';
 import { languageLookupService } from './languageLookup.service.js';
 import { DOC_LOOKUP_ID_BY_PATH } from './documentLookupMap.js';
@@ -256,6 +257,9 @@ async function getIdentityNames(userId) {
     accountAlias: account.AccountAlias,
     trusted: [account.AccountName, flowAlias].filter((name) => name?.trim()),
     claimed: claimedAliases,
+    // Lyricist/Composer/Both - which of the song's role-labelled credit lists matchCredits()
+    // must check the member's name against (see workMatch.service.js).
+    roleLabels: listRoleLabels(account.RollTypeIds),
   };
 }
 
@@ -349,8 +353,11 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     ? await runOcrAndPersist(registrationId, effectiveOcrType, documentUrl, docType)
     : null;
 
-  // DocStatus: 0 = no OCR attempted (NOC/COMPANY_DOC/PROFILE_PHOTO), 1 = OCR-verified, 2 = OCR failed.
-  const docStatus = ocrResult ? (ocrResult.verified ? 1 : 2) : 0;
+  // OcrStatus: whether OCR ran at all, independent of pass/fail - 0 = true (ran), 1 = false (did not
+  // run). Deliberately the opposite of the usual 0/1 boolean direction; confirmed with the user.
+  // DocStatus is deliberately no longer computed/written - confirmed with the user, OcrStatus is
+  // the only one of the two this app writes to from now on.
+  const ocrStatus = ocrResult ? 0 : 1;
 
   const pathKey = resolveDocPathKey(account);
   const documentLookupId = pathKey ? DOC_LOOKUP_ID_BY_PATH[pathKey]?.[docType] ?? null : null;
@@ -359,7 +366,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     accountId: registrationId,
     caption: docType,
     documentUrl,
-    docStatus,
+    ocrStatus,
     documentLookupId,
     docFileName: buildDocFileName(registrationId, documentLookupId, documentUrl),
     createdBy: account?.AccountName?.trim() || null,
@@ -401,6 +408,12 @@ async function saveConversationField(userId, registrationId, field, value) {
     // The publisher paths never reach the role question, so their RollTypeIds is decided here.
     const publisherRoll = PUBLISHER_ROLL_TYPE_ID_BY_REG_TYPE[regType];
     if (publisherRoll) update.RollTypeIds = publisherRoll;
+  } else if (field === 'TeritoryAppFor') {
+    // IPRS stores these as numeric codes, not the answer text.
+    const upper = trimmed.toUpperCase();
+    const code = upper === 'WORLD' ? '2136' : upper === 'INDIA' ? '0356' : null;
+    if (!code) return;
+    update = { TeritoryAppFor: code };
   } else if (field === 'EntityType') {
     // Their column is a 2-letter code (CP/PR/SP), not the answer text.
     const entityType = resolveEntityType(trimmed);
@@ -778,13 +791,21 @@ async function complete(userId, registrationId) {
     });
   }
 
-  // Territory defaults to WORLD when the user skipped the flow's territory question (or never
-  // reached it) - an actual INDIA/WORLD answer is already persisted by saveConversationField() and
-  // wins. Done here rather than on the skip itself: the territory blocks have no Typebot skip
-  // option, and registrationEngine.handle() only persists a truthy answer, so there's no skip
-  // event to hook. Idempotent - only fires while the column is still empty.
+  // Nationality defaults to Indian for the three paths that never ask it (only the NRI path's
+  // chat question and a passport upload write this column) - same idempotent pattern as
+  // TeritoryAppFor's default below.
+  if (!account.Nationality?.trim()) {
+    await registrationRepository.update(registrationId, { Nationality: 'Indian' });
+  }
+
+  // Territory defaults to WORLD (code 2136) when the user skipped the flow's territory question
+  // (or never reached it) - an actual INDIA/WORLD answer is already persisted by
+  // saveConversationField() (as its numeric code) and wins. Done here rather than on the skip
+  // itself: the territory blocks have no Typebot skip option, and registrationEngine.handle()
+  // only persists a truthy answer, so there's no skip event to hook. Idempotent - only fires
+  // while the column is still empty.
   if (!account.TeritoryAppFor?.trim()) {
-    await registrationRepository.update(registrationId, { TeritoryAppFor: 'WORLD' });
+    await registrationRepository.update(registrationId, { TeritoryAppFor: '2136' });
   }
 
   let updated = account;
