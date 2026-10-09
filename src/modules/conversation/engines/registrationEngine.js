@@ -758,8 +758,8 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
 
     // Names already on file: the identity-document name and the registration stage name are
     // evidence; aliases the member gave at this step on an earlier song are only their own claim.
-    const { trusted, claimed } = await registrationService.getIdentityNames(userId);
-    const { matched } = matchCredits(resolved, trusted, claimed);
+    const { trusted, claimed, roleLabels } = await registrationService.getIdentityNames(userId);
+    const { matched } = matchCredits(resolved, trusted, claimed, roleLabels);
 
     if (!matched) {
       // Not in the credits. The usual reason is a stage name we don't have on file rather than a
@@ -807,7 +807,8 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       });
     }
 
-    const { matched } = matchCredits(resolved, [], names);
+    const { roleLabels } = await registrationService.getIdentityNames(userId);
+    const { matched } = matchCredits(resolved, [], names, roleLabels);
 
     if (!matched && attempts + 1 < MAX_ALIAS_ATTEMPTS) {
       typebotSessionStore.set(userId, {
