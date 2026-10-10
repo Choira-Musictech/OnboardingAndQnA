@@ -160,6 +160,19 @@ test('replay is capped - a corrupt journal cannot hammer Typebot forever', async
   assert.equal(out.replayed, MAX_REPLAY_TURNS);
 });
 
+test('replay reports the input each replayed turn answered, so a question\'s own options can be read back', async (t) => {
+  const flow = stubFlow(['b1', 'b2', 'b3']);
+  t.after(() => { typebotClient.continueChat = realContinue; });
+
+  const out = await conversationJournalService.replayJournal({
+    sessionId: 's1',
+    startResponse: flow.start(),
+    turns: [turn('b1', 'a'), turn('b2', 'b')],
+  });
+
+  assert.deepEqual(out.askedInputs.map((input) => input.id), ['b1', 'b2']);
+});
+
 // --- persistence -----------------------------------------------------------
 
 let dbAvailable = false;
@@ -248,6 +261,22 @@ test('starting over leaves nothing behind to resume into', async (t) => {
   await conversationJournalService.clearJournal(userId);
   assert.equal(await conversationJournalService.countTurns(userId), 0);
   assert.equal(await conversationJournalService.lastBlockId(userId), null);
+});
+
+test('switching an address-proof document rewrites only the newest address-type answer', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  const PERMANENT_TYPE = 'vwtm9i19qrzl3dxjzifdw6xnp';
+  const CURRENT_TYPE = 'vgbmeklrpc3b4hu8tvmodnt4e';
+
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', variableId: PERMANENT_TYPE, answer: 'Passport' });
+  await conversationJournalService.recordTurn({ userId, blockId: 'b2', answer: 'https://s3/p.jpeg' });
+  await conversationJournalService.recordTurn({ userId, blockId: 'b3', variableId: CURRENT_TYPE, answer: 'Passport' });
+
+  await conversationJournalService.replaceLatestAddressProofAnswer(userId, 'Driving Licence');
+
+  const journal = await conversationJournalService.loadJournal(userId);
+  assert.deepEqual(journal.map((entry) => entry.answer), ['Passport', 'https://s3/p.jpeg', 'Driving Licence']);
 });
 
 test('a member with no journal is a first-time member, not a resume', async (t) => {

@@ -32,6 +32,7 @@
 // ==================================================================
 import { conversationJournalRepository } from '../repositories/conversationJournal.repository.js';
 import { typebotClient } from './typebot/typebotClient.js';
+import { ADDRESS_PROOF_TYPE_VARIABLE_IDS } from './typebot/addressProofTypeMap.js';
 import { logger } from '../../../utils/logger.js';
 
 // A runaway replay would hammer Typebot on every message. The flow is ~34 questions on its longest
@@ -107,6 +108,24 @@ async function recordTurn({ userId, blockId, variableId, answer, attachedFileUrl
   }
 }
 
+// The member switched the document for the address proof they are uploading right now (after an
+// OCR failure - see registrationEngine.js). The question for that slot is the newest address-type
+// turn, so its stored answer is rewritten: without this a resume would rebuild the OLD type and run
+// the wrong OCR on the new document. If the new answer routes differently in Typebot, replay's
+// block-id guard stops there rather than landing on a wrong branch. Never throws, like recordTurn.
+async function replaceLatestAddressProofAnswer(userId, answer) {
+  try {
+    return await conversationJournalRepository.updateLatestAnswerForVariables(
+      userId,
+      Object.keys(ADDRESS_PROOF_TYPE_VARIABLE_IDS),
+      answer,
+    );
+  } catch (err) {
+    logger.warn({ userId, err }, 'Failed to update the journaled address-proof answer');
+    return null;
+  }
+}
+
 async function clearJournal(userId) {
   try {
     return await conversationJournalRepository.deleteByAccountId(userId);
@@ -132,13 +151,16 @@ async function truncateAfterReplay(userId, replayed) {
 // conversation. `startResponse` is the live startChat response - replay begins from whatever it is
 // already asking, so a journal whose very first turn no longer matches diverges immediately rather
 // than answering the wrong question.
+// `askedInputs[i]` is the input turn i answered - the caller reads the address-proof question's own
+// option list from it (see registrationEngine.resumeFromJournal).
 async function replayJournal({ sessionId, startResponse, turns }) {
   let response = startResponse;
   let replayed = 0;
+  const askedInputs = [];
 
   for (const turn of turns) {
-    if (replayed >= MAX_REPLAY_TURNS) return { response, replayed, stop: REPLAY_STOP.CAPPED };
-    if (!response.input) return { response, replayed, stop: REPLAY_STOP.ENDED };
+    if (replayed >= MAX_REPLAY_TURNS) return { response, replayed, askedInputs, stop: REPLAY_STOP.CAPPED };
+    if (!response.input) return { response, replayed, askedInputs, stop: REPLAY_STOP.ENDED };
 
     // The guard that makes a republished flow safe. Sending a stored answer to a question it was
     // not given to is how a member ends up on the wrong branch with plausible-looking data - for a
@@ -148,9 +170,10 @@ async function replayJournal({ sessionId, startResponse, turns }) {
         { sessionId, expected: turn.blockId, actual: response.input.id, turnIndex: turn.turnIndex },
         'Journal no longer matches the published flow - resuming from the divergence point',
       );
-      return { response, replayed, stop: REPLAY_STOP.DIVERGED };
+      return { response, replayed, askedInputs, stop: REPLAY_STOP.DIVERGED };
     }
 
+    const askedInput = response.input;
     try {
       response = await typebotClient.continueChat({
         sessionId,
@@ -160,12 +183,13 @@ async function replayJournal({ sessionId, startResponse, turns }) {
       // Half a replay is still progress - hand back whatever we reached rather than dropping the
       // member at question 1.
       logger.warn({ sessionId, turnIndex: turn.turnIndex, err }, 'Replay failed mid-journal');
-      return { response, replayed, stop: REPLAY_STOP.FAILED };
+      return { response, replayed, askedInputs, stop: REPLAY_STOP.FAILED };
     }
+    askedInputs.push(askedInput);
     replayed += 1;
   }
 
-  return { response, replayed, stop: REPLAY_STOP.COMPLETE };
+  return { response, replayed, askedInputs, stop: REPLAY_STOP.COMPLETE };
 }
 
 export const conversationJournalService = {
@@ -173,6 +197,7 @@ export const conversationJournalService = {
   countTurns,
   lastBlockId,
   recordTurn,
+  replaceLatestAddressProofAnswer,
   clearJournal,
   truncateAfterReplay,
   replayJournal,

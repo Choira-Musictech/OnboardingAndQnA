@@ -14,6 +14,7 @@
 // ==================================================================
 import { appError } from '../../../../shared/errors.js';
 import { env } from '../../../../config/env.js';
+import { logger } from '../../../../utils/logger.js';
 
 const DOC_TYPE_PATHS = {
   PAN: 'pan',
@@ -73,7 +74,7 @@ export function createHttpOcrProvider() {
   // `pan` endpoint accepts an optional `type` field, "p" for a person's PAN, "c" for a company's,
   // so it knows which holder type to expect from the card image. Only meaningful for docType=PAN -
   // ignored (and omitted from the request body) for every other doc type.
-  async function extract({ docType, documentUrl, panHolderType, holderName }) {
+  async function extract({ docType, documentUrl, panHolderType, holderName, registrationId }) {
     const path = DOC_TYPE_PATHS[docType];
     if (!path) {
       throw appError(`No OCR endpoint for docType=${docType}`, {
@@ -90,6 +91,9 @@ export function createHttpOcrProvider() {
       requestBody.name = holderName || '';
     }
 
+    // One line per call, success or not, so whether OCR ran - and how long it took - can be read
+    // from the log instead of being inferred from the database afterwards.
+    const startedAt = Date.now();
     let response;
     try {
       response = await fetch(`${env.OCR_API_BASE_URL}/api/documents/${path}`, {
@@ -99,6 +103,10 @@ export function createHttpOcrProvider() {
         signal: AbortSignal.timeout(env.OCR_REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
+      logger.warn(
+        { registrationId, docType, durationMs: Date.now() - startedAt, reason: cause?.cause?.code ?? cause?.name, message: cause?.message },
+        'OCR call failed - service unreachable',
+      );
       throw appError('OCR service unreachable', { errorCode: 'OCR_EXTRACTION_FAILED', details: { stage: 'ocr_call' }, cause });
     }
 
@@ -109,6 +117,10 @@ export function createHttpOcrProvider() {
     // that reflects whether OCR/verification actually succeeded, so that's the field that decides
     // failure here.
     if (!response.ok || !body?.status) {
+      logger.warn(
+        { registrationId, docType, status: response.status, durationMs: Date.now() - startedAt, code: body?.code, message: body?.message },
+        'OCR call rejected the document',
+      );
       throw appError(body?.message ?? `OCR request failed with status ${response.status}`, {
         statusCode: response.status,
         errorCode: 'OCR_EXTRACTION_FAILED',
@@ -116,6 +128,7 @@ export function createHttpOcrProvider() {
       });
     }
 
+    logger.info({ registrationId, docType, status: response.status, durationMs: Date.now() - startedAt }, 'OCR call succeeded');
     return body.data;
   }
 
