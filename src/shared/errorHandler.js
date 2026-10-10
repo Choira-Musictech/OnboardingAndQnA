@@ -40,6 +40,27 @@ function inMemberLanguage(message, req, details) {
   }
 }
 
+/**
+ * The underlying reason an operational error was raised, for the log only. A failed fetch() is
+ * a bare "fetch failed" whose real reason (UND_ERR_CONNECT_TIMEOUT, ECONNRESET, ENOTFOUND...) sits
+ * one or two `cause`s deeper, so the whole chain is walked. Capped so a cyclic chain can't loop.
+ */
+function describeCause(cause) {
+  const chain = [];
+  for (let current = cause; current && chain.length < 5; current = current.cause) {
+    if (typeof current !== 'object') {
+      chain.push({ message: String(current) });
+      break;
+    }
+    chain.push({
+      name: current.name,
+      message: current.message,
+      ...(current.code ? { code: current.code } : {}),
+    });
+  }
+  return chain;
+}
+
 function normalizeError(err) {
   if (err instanceof ZodError) {
     return validationError('Validation failed', err.flatten().fieldErrors);
@@ -108,7 +129,8 @@ export function errorHandler(err, req, res, next) {
     };
     if (normalized.details) body.error.details = normalized.details;
 
-    logger.warn({ requestId, statusCode }, `Operational error: ${normalized.message}`);
+    const cause = describeCause(normalized.cause);
+    logger.warn({ requestId, statusCode, ...(cause.length ? { cause } : {}) }, `Operational error: ${normalized.message}`);
     return res.status(statusCode).json(body);
   }
 
