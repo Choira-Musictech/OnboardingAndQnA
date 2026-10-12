@@ -164,14 +164,20 @@ const PINCODE_COLUMN_BY_ADDRESS_COLUMN = { AccountAddress: 'Pincode', AccountAdd
 // be answered in either order by the flow, so this is called after either one is written - same
 // re-derivation pattern copyPermanentAddressToCurrent already uses.
 async function resolveAndPersistBookId(registrationId) {
+  // Pincode is not six digits. IPRS writes the locality with it - "OKHLA - 110020" -
+  // and 22,916 of the 22,995 populated rows look like that. App_Geographical.GeographicalCode
+  // is the bare code, so comparing the column directly matched only the 77 pure-digit rows
+  // and BookId stayed null for everyone else. The digits are pulled out first, with the same
+  // helper the address path already uses.
+  const account = await registrationRepository.findByAccountId(registrationId);
+  const pincode = readerPincode(account?.Pincode) ?? extractPincode(account?.Pincode);
+  if (!pincode || !account?.AccountRegType) return;
+
   const rows = await prisma.$queryRaw`
-    SELECT dbo.GetStateBookId(AG.GroupId, AA.AccountRegType) AS BookId
-    FROM App_Accounts AA
-    CROSS APPLY (
-      SELECT TOP 1 GroupId FROM App_Geographical
-      WHERE GeographicalCode = CAST(AA.Pincode AS VARCHAR(20))
+    SELECT dbo.GetStateBookId(AG.GroupId, ${account.AccountRegType}) AS BookId
+    FROM (
+      SELECT TOP 1 GroupId FROM App_Geographical WHERE GeographicalCode = ${pincode}
     ) AG
-    WHERE AA.AccountId = ${BigInt(registrationId)}
   `;
   const bookId = rows[0]?.BookId;
   if (bookId == null) return;
