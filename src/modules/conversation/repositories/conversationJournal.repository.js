@@ -46,6 +46,18 @@ function deleteFromTurnIndex(accountId, turnIndex) {
   });
 }
 
+// Rewrites the answer of the newest turn that answered one of `variableIds`. Returns the updated row,
+// or null when no such turn exists.
+async function updateLatestAnswerForVariables(accountId, variableIds, answer) {
+  const latest = await prisma.appAccountsChatJournal.findFirst({
+    where: { AccountId: BigInt(accountId), VariableId: { in: variableIds } },
+    orderBy: { TurnIndex: 'desc' },
+    select: { JournalId: true },
+  });
+  if (!latest) return null;
+  return prisma.appAccountsChatJournal.update({ where: { JournalId: latest.JournalId }, data: { Answer: answer } });
+}
+
 export const conversationJournalRepository = {
   findByAccountId,
   countByAccountId,
@@ -53,4 +65,5 @@ export const conversationJournalRepository = {
   createTurn,
   deleteByAccountId,
   deleteFromTurnIndex,
+  updateLatestAnswerForVariables,
 };

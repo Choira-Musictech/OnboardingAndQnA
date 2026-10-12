@@ -160,6 +160,8 @@ const envSchema = z.object({
   // Where each member's uploads are also copied, one folder per member (see
   // documentStorage.service.js). Blank turns the copy off.
   DOCUMENT_STORAGE_DIR: z.string().default('uploads/member-documents'),
+  // Also write every log line to this file (e.g. logs/backend.log). Blank = terminal only.
+  LOG_FILE: z.string().optional().default(''),
 
   /* PayU Payment Gateway */
   PAYU_KEY: z.string().optional().default('test_key'),
