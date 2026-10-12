@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import {
   createRegistrationEmailService,
   registrationEmailService,
+  parseEmailList,
 } from '../src/modules/registration/services/registrationEmail.service.js';
 import { registrationRepository } from '../src/modules/registration/repositories/registration.repository.js';
 import { registrationService } from '../src/modules/registration/services/registration.service.js';
@@ -23,11 +24,11 @@ const ACCOUNT = {
   AccountEmail: 'rohit@example.com',
 };
 
-function setup({ iprsEmail = 'dev@choira.io', mailer } = {}) {
+function setup({ iprsEmail = 'dev@choira.io', mailer, bookEmails = null } = {}) {
   const sent = [];
   const service = createRegistrationEmailService({
     mailer: mailer ?? (async (mail) => sent.push(mail)),
-    findBookName: async (bookId) => (bookId == null ? null : 'West Individual'),
+    findBook: async (bookId) => (bookId == null ? null : { BookName: 'West Individual', EmailId: bookEmails }),
     iprsEmail,
   });
   return { sent, service };
@@ -175,4 +176,67 @@ test('the member mail falls back to Dear Applicant and escapes the name', async 
   sent.length = 0;
   await service.sendCompletionEmails({ ...ACCOUNT, AccountName: '<b>X</b>' });
   assert.match(sent[1].html, /^Dear &lt;b&gt;X&lt;\/b&gt;,/);
+});
+
+// --- the book's verification team (App_BookMaster.EmailId) ------------------
+
+test('every address in the book\'s EmailId gets the same IPRS notice', async () => {
+  const { sent, service } = setup({ bookEmails: 'verify1@iprs.org, verify2@iprs.org' });
+  await service.sendCompletionEmails(ACCOUNT);
+
+  assert.deepEqual(sent.map((mail) => mail.to), ['dev@choira.io', 'verify1@iprs.org', 'verify2@iprs.org', 'rohit@example.com']);
+  for (const mail of sent.slice(1, 3)) {
+    assert.equal(mail.subject, sent[0].subject);
+    assert.equal(mail.html, sent[0].html);
+    assert.equal(mail.text, sent[0].text);
+  }
+});
+
+test('messy lists are cleaned: spaces, blanks, case duplicates and non-addresses', async () => {
+  const { sent, service } = setup({ bookEmails: ' a@iprs.org ,, A@IPRS.ORG; not-an-email , b@iprs.org,' });
+  await service.sendCompletionEmails(ACCOUNT);
+
+  assert.deepEqual(sent.map((mail) => mail.to), ['dev@choira.io', 'a@iprs.org', 'b@iprs.org', 'rohit@example.com']);
+});
+
+test('the membership desk is not mailed twice when it is also in the book\'s list', async () => {
+  const { sent, service } = setup({ bookEmails: 'DEV@choira.io, verify@iprs.org' });
+  await service.sendCompletionEmails(ACCOUNT);
+
+  assert.deepEqual(sent.map((mail) => mail.to), ['dev@choira.io', 'verify@iprs.org', 'rohit@example.com']);
+});
+
+test('no book, or a book with no EmailId, sends only the desk and member mails', async () => {
+  for (const [account, bookEmails] of [[{ ...ACCOUNT, BookId: null }, 'verify@iprs.org'], [ACCOUNT, null], [ACCOUNT, '  ']]) {
+    const { sent, service } = setup({ bookEmails });
+    await service.sendCompletionEmails(account);
+    assert.deepEqual(sent.map((mail) => mail.to), ['dev@choira.io', 'rohit@example.com']);
+  }
+});
+
+test('the team mails still go out when the desk address is not configured', async () => {
+  const { sent, service } = setup({ iprsEmail: '', bookEmails: 'verify@iprs.org' });
+  await service.sendCompletionEmails(ACCOUNT);
+
+  assert.deepEqual(sent.map((mail) => mail.to), ['verify@iprs.org', 'rohit@example.com']);
+});
+
+test('one failing team address does not stop the other team mails or the member mail', async () => {
+  const sent = [];
+  const mailer = async (mail) => {
+    if (mail.to === 'broken@iprs.org') throw new Error('mailbox unavailable');
+    sent.push(mail);
+  };
+  const { service } = setup({ mailer, bookEmails: 'broken@iprs.org, verify@iprs.org' });
+
+  await service.sendCompletionEmails(ACCOUNT);
+  assert.deepEqual(sent.map((mail) => mail.to), ['dev@choira.io', 'verify@iprs.org', 'rohit@example.com']);
+});
+
+test('parseEmailList', () => {
+  assert.deepEqual(parseEmailList(null), []);
+  assert.deepEqual(parseEmailList(''), []);
+  assert.deepEqual(parseEmailList('one@x.com'), ['one@x.com']);
+  assert.deepEqual(parseEmailList('one@x.com,two@y.in;three@z.org'), ['one@x.com', 'two@y.in', 'three@z.org']);
+  assert.deepEqual(parseEmailList('one@x.com, ONE@x.com, bad, @x.com'), ['one@x.com']);
 });
