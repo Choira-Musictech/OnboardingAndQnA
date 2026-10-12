@@ -34,13 +34,13 @@ async function markCompleted(accountId) {
   return count === 1;
 }
 
-async function findBookName(bookId) {
+// EmailId holds the book's verification team - several addresses in one comma-separated field.
+async function findBook(bookId) {
   if (bookId == null) return null;
-  const book = await prisma.appBookMaster.findUnique({
+  return prisma.appBookMaster.findUnique({
     where: { BookID: BigInt(bookId) },
-    select: { BookName: true },
+    select: { BookName: true, EmailId: true },
   });
-  return book?.BookName ?? null;
 }
 
 function update(accountId, data) {
@@ -99,7 +99,7 @@ export const registrationRepository = {
   findByAccountId,
   findByAccountEmail,
   markCompleted,
-  findBookName,
+  findBook,
   update,
   upsertDocument,
   findDocumentsByAccountId,
