@@ -39,7 +39,7 @@ test('a typed message after completing still gets the plain reply', async () => 
 });
 
 test("the payment card's and relogin message's sentences all translate", () => {
-  for (const language of ['hi', 'mr', 'gu', 'bn']) {
+  for (const language of ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn']) {
     for (const phrase of [
       'Thank You for Registration!',
       'Application Number',
