@@ -154,7 +154,8 @@ export async function translateConversationPayload(payload, requestedLanguage) {
   // only translatable - and only matches the dictionary - when it is joined back up.
   let working = payload;
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  const bubbleTexts = messages.map((m) => (m?.content?.richText ? messageText(m.content) : '')).filter(Boolean);
+  const history = Array.isArray(payload.history) ? payload.history : [];
+  const bubbleTexts = [...messages, ...history].map((m) => (m?.content?.richText ? messageText(m.content) : '')).filter(Boolean);
 
   if (bubbleTexts.length) {
     const translatedBubbles = await translateTexts(bubbleTexts, targetLanguage);
@@ -164,14 +165,13 @@ export async function translateConversationPayload(payload, requestedLanguage) {
     });
 
     if (byOriginal.size) {
-      working = {
-        ...payload,
-        messages: messages.map((m) => {
-          if (!m?.content?.richText) return m;
-          const hit = byOriginal.get(messageText(m.content));
-          return hit ? { ...m, content: rebuildMessage(m.content, hit, targetLanguage) } : m;
-        }),
+      const rebuild = (m) => {
+        if (!m?.content?.richText) return m;
+        const hit = byOriginal.get(messageText(m.content));
+        return hit ? { ...m, content: rebuildMessage(m.content, hit, targetLanguage) } : m;
       };
+      working = { ...payload, messages: messages.map(rebuild) };
+      if (history.length) working.history = history.map(rebuild);
     }
   }
 
