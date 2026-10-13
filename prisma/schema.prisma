@@ -178,6 +178,9 @@ model AppAccountsDoc {
   ApprovalType     String?   @db.NVarChar(5)
   DocumentName     String?   @db.NVarChar(500)
   DocStatus        Int?      @db.TinyInt
+  // Whether OCR ran for this document at all, independent of DocStatus's pass/fail detail.
+  // Deliberately 0 = true (OCR attempted), 1 = false (no OCR attempted) - confirmed with the user.
+  OcrStatus        Int?      @db.TinyInt
   DocumentCaption  String?   @db.NVarChar(500)
   DocFileName      String?   @db.NVarChar(100)
   DocUploadDesc    String?   @db.NVarChar(100)

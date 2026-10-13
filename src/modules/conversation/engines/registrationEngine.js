@@ -47,6 +47,7 @@ import {
 } from '../services/typebot/paymentGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
 import { registrationReviewService } from '../../registration/services/registrationReview.service.js';
+import { documentStorageService } from '../../registration/services/documentStorage.service.js';
 import { resolveProgress } from '../services/typebot/progressMap.js';
 import {
   isEmailStep,
@@ -135,6 +136,51 @@ const ADDRESS_PROOF_UPLOAD_TYPES = new Set([
   'COMM_ADDRESS_PROOF_2',
 ]);
 
+// The address-proof state that has to survive every typebotSessionStore.set() - set() replaces the
+// whole session object, so it is carried by hand (see the pendingDocConfirmation branch).
+function carryAddressProof(session) {
+  return {
+    ...(session?.addressProofOcrType !== undefined ? { addressProofOcrType: session.addressProofOcrType } : {}),
+    ...(session?.addressProofOptions?.length ? { addressProofOptions: session.addressProofOptions } : {}),
+  };
+}
+
+// The documents the member's own address question offered, captured from its choice items when they
+// answer it - the lists differ by path and slot and live only in the published flow. The "Type your
+// address" answers are left out: they branch the flow, which the upload step cannot do.
+function addressProofOptionsFrom(input) {
+  return (input?.items ?? [])
+    .map((item) => String(item?.content ?? '').trim())
+    .filter((content) => content && !isManualAddressAnswer(content));
+}
+
+const sameAnswer = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
+// Offered when OCR fails on an address-proof upload. Synthetic, like OCR_CONFIRM_CHOICE_INPUT - the
+// Typebot session stays parked on the same upload input throughout.
+const RETRY_SAME = 'Upload again';
+const RETRY_OTHER = 'Choose a different document';
+const ADDRESS_PROOF_RETRY_INPUT = {
+  id: 'address-proof-retry',
+  type: 'choice input',
+  items: [
+    { id: 'address-proof-retry-same', content: RETRY_SAME },
+    { id: 'address-proof-retry-other', content: RETRY_OTHER },
+  ],
+};
+
+// The member's own option list, minus the document that just failed - "Upload again" already covers
+// retrying that one.
+function addressProofPickInput(options, failedOcrType) {
+  const others = options.filter((option) => failedOcrType == null || resolveAddressProofOcrType(option) !== failedOcrType);
+  const list = others.length ? others : options;
+  return {
+    id: 'address-proof-pick',
+    type: 'choice input',
+    items: list.map((content, index) => ({ id: `address-proof-pick-${index}`, content })),
+  };
+}
+
 function isAffirmative(message) {
   const normalized = String(message ?? '').trim().toLowerCase();
   return ['yes, confirm', 'yes', 'y', 'confirm'].includes(normalized);
@@ -151,11 +197,12 @@ const SAME_AS_ADDRESS_BLOCK_IDS = new Set([
   'cbmqojadjfm2jmbk9c17a59q',
 ]);
 
-function textMessage(id, text) {
+function textMessage(id, text, extra) {
   return {
     id,
     type: 'text',
     content: { type: 'richText', richText: [{ type: 'p', children: [{ text }] }] },
+    ...(extra ?? {}),
   };
 }
 
@@ -437,7 +484,7 @@ async function resumeFromJournal({ userId, token }) {
     prefilledVariables: { token, registrationId: userId },
   });
 
-  const { response, replayed, stop, transcript } = await conversationJournalService.replayJournal({
+  const { response, replayed, askedInputs = [], stop, transcript } = await conversationJournalService.replayJournal({
     sessionId: startResponse.sessionId,
     startResponse,
     turns,
@@ -450,6 +497,21 @@ async function resumeFromJournal({ userId, token }) {
   }
 
   logger.info({ userId, replayed, total: turns.length, stop }, 'Resumed a registration from its journal');
+
+  // handle() normally sets session.addressProofOcrType live when the member answers the paired
+  // "what type of document is this?" question (see line ~1181 below) - replay never calls handle(),
+  // so without reconstructing it here, a member who logs out before uploading their address proof
+  // loses OCR entirely on resume (see addressProofTypeMap.js). Scoped to what was actually replayed,
+  // and only the last match wins, mirroring the live path's single mutable field.
+  // The question's option list comes back the same way, from the input each replayed turn answered.
+  let addressProofOcrType;
+  let addressProofOptions = [];
+  turns.slice(0, replayed).forEach((turn, index) => {
+    if (isAddressProofTypeStep(turn.variableId)) {
+      addressProofOcrType = resolveAddressProofOcrType(turn.answer);
+      addressProofOptions = addressProofOptionsFrom(askedInputs[index]);
+    }
+  });
 
   // Replay ran the flow to its end - they had actually finished, so treat this exactly as the relay
   // does when it runs out of questions.
@@ -466,7 +528,11 @@ async function resumeFromJournal({ userId, token }) {
     return { sessionEnded: true, messages: response.messages ?? [], input: null, progress: 100 };
   }
 
-  typebotSessionStore.set(userId, { sessionId: startResponse.sessionId, input: response.input });
+  typebotSessionStore.set(userId, {
+    sessionId: startResponse.sessionId,
+    input: response.input,
+    ...carryAddressProof({ addressProofOcrType, addressProofOptions }),
+  });
 
   // A clean replay needs no explanation: the member sees their own conversation redrawn from the
   // top (`history`) with the next question under it, exactly as if they had never left. Only a
@@ -568,19 +634,18 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
   // incoming `message` answers "is this correct?", not whatever Typebot
   // question was live before the upload.
   if (existing?.pendingDocConfirmation && message !== undefined) {
-    const { fileUrl } = existing.pendingDocConfirmation;
+    const { fileUrl, docType, ocrDocType, extracted } = existing.pendingDocConfirmation;
 
     // typebotSessionStore.set() replaces the whole session object, so addressProofOcrType has to be
     // carried forward explicitly here - otherwise a reupload silently loses it and the second OCR
     // attempt falls back to the generic doc type, which isn't an OCR type, so extraction is skipped.
-    const carriedAddressProofOcrType =
-      existing.addressProofOcrType !== undefined ? { addressProofOcrType: existing.addressProofOcrType } : {};
+    const carriedAddressProof = carryAddressProof(existing);
 
     if (!isAffirmative(message)) {
       typebotSessionStore.set(userId, {
         sessionId: existing.sessionId,
         input: existing.input,
-        ...carriedAddressProofOcrType,
+        ...carriedAddressProof,
       });
       return {
         sessionEnded: false,
@@ -590,16 +655,98 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       };
     }
 
-    // Confirmed: replay this exactly as handleUpload() would have advanced
-    // the conversation before this confirmation step existed.
+    // Confirmed: only now is anything from this document saved - what OCR read and the document row.
+    // A rejected document leaves nothing behind for later uploads to be checked against (a wrong
+    // PAN's name used to stick as AccountName and fail the member's own passbook).
+    if (docType) {
+      try {
+        await registrationService.confirmDocument(userId, userId, { docType, documentUrl: fileUrl, ocrDocType, extracted });
+      } catch (err) {
+        logger.error({ userId, docType, err }, 'Could not save a confirmed document');
+        typebotSessionStore.set(userId, { sessionId: existing.sessionId, input: existing.input, ...carriedAddressProof });
+        return {
+          sessionEnded: false,
+          messages: [textMessage('ocr-confirmation-save-failed', 'Something went wrong saving that document - please upload it again.')],
+          input: existing.input,
+          progress: resolveProgress(existing.input.id),
+        };
+      }
+    }
+
+    // Then advance exactly as handleUpload() would have before this confirmation step existed.
     typebotSessionStore.set(userId, {
       sessionId: existing.sessionId,
       input: existing.input,
-      ...carriedAddressProofOcrType,
+      ...carriedAddressProof,
     });
     existing = typebotSessionStore.get(userId);
     message = undefined;
     attachedFileUrls = [fileUrl];
+  }
+
+  // After an address-proof OCR failure: "Upload again" or "Choose a different document". Neither
+  // answer goes to Typebot - its session is still on the same upload input.
+  if (existing?.pendingAddressProofRetry && message !== undefined) {
+    const base = { sessionId: existing.sessionId, input: existing.input, ...carryAddressProof(existing) };
+
+    if (sameAnswer(message, RETRY_OTHER)) {
+      typebotSessionStore.set(userId, { ...base, pendingAddressProofPick: true });
+      return {
+        sessionEnded: false,
+        messages: [textMessage('address-proof-pick-prompt', 'Which document would you like to upload instead?')],
+        input: addressProofPickInput(existing.addressProofOptions ?? [], existing.addressProofOcrType),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    if (sameAnswer(message, RETRY_SAME)) {
+      typebotSessionStore.set(userId, base);
+      return {
+        sessionEnded: false,
+        messages: [textMessage('address-proof-retry-same', 'No problem - please upload the document again.')],
+        input: existing.input,
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    // Anything else: ask the same two-way question again.
+    return {
+      sessionEnded: false,
+      messages: [],
+      input: ADDRESS_PROOF_RETRY_INPUT,
+      progress: resolveProgress(existing.input.id),
+    };
+  }
+
+  // The member picked a different document for this address proof. Only the OCR type changes - the
+  // slot (and so where the document and extracted address are stored) stays the same.
+  if (existing?.pendingAddressProofPick && message !== undefined) {
+    const options = existing.addressProofOptions ?? [];
+    const pick = options.find((option) => sameAnswer(option, message));
+
+    if (!pick) {
+      return {
+        sessionEnded: false,
+        messages: [],
+        input: addressProofPickInput(options, existing.addressProofOcrType),
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
+    typebotSessionStore.set(userId, {
+      sessionId: existing.sessionId,
+      input: existing.input,
+      addressProofOcrType: resolveAddressProofOcrType(pick),
+      addressProofOptions: options,
+    });
+    await conversationJournalService.replaceLatestAddressProofAnswer(userId, pick);
+
+    return {
+      sessionEnded: false,
+      messages: [textMessage('address-proof-picked', 'Okay - please upload that document now.')],
+      input: existing.input,
+      progress: resolveProgress(existing.input.id),
+    };
   }
 
   // Resolve a pending email-OTP verification before anything else - the
@@ -710,8 +857,8 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
 
     // Names already on file: the identity-document name and the registration stage name are
     // evidence; aliases the member gave at this step on an earlier song are only their own claim.
-    const { trusted, claimed } = await registrationService.getIdentityNames(userId);
-    const { matched } = matchCredits(resolved, trusted, claimed);
+    const { trusted, claimed, roleLabels } = await registrationService.getIdentityNames(userId);
+    const { matched } = matchCredits(resolved, trusted, claimed, roleLabels);
 
     if (!matched) {
       // Not in the credits. The usual reason is a stage name we don't have on file rather than a
@@ -759,7 +906,8 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       });
     }
 
-    const { matched } = matchCredits(resolved, [], names);
+    const { roleLabels } = await registrationService.getIdentityNames(userId);
+    const { matched } = matchCredits(resolved, [], names, roleLabels);
 
     if (!matched && attempts + 1 < MAX_ALIAS_ATTEMPTS) {
       typebotSessionStore.set(userId, {
@@ -1126,6 +1274,7 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
   // `message` answers the question the user was just asked (answeredInput),
   // not the new one in `response.input` - persist it before overwriting the session.
   let addressProofOcrType;
+  let addressProofOptions = [];
   if (answeredInput && message) {
     const field = resolveConversationField(answeredInput.options?.variableId);
     if (field) {
@@ -1150,6 +1299,8 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
     // handleUpload() to decide OCR routing (see addressProofTypeMap.js).
     if (isAddressProofTypeStep(answeredInput.options?.variableId)) {
       addressProofOcrType = resolveAddressProofOcrType(message);
+      // Kept so a failed upload can offer this same list again (see ADDRESS_PROOF_RETRY_INPUT).
+      addressProofOptions = addressProofOptionsFrom(answeredInput);
       if (addressProofOcrType === null && !isManualAddressAnswer(message)) {
         logger.warn({ userId, message }, 'Address-proof type answer did not resolve to an OCR type');
       }
@@ -1203,7 +1354,7 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
     typebotSessionStore.set(userId, {
       sessionId,
       input: response.input,
-      ...(addressProofOcrType !== undefined ? { addressProofOcrType } : {}),
+      ...carryAddressProof({ addressProofOcrType, addressProofOptions }),
     });
   }
 
@@ -1327,7 +1478,26 @@ async function handleUploadCore({ userId, token, file }) {
 
   let result = null;
   if (docType) {
-    result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType);
+    // Deferred: a document that goes through the OCR card is saved only once the member confirms it
+    // (see the pendingDocConfirmation branch in handleCore) - one they reject saves nothing.
+    result = await registrationService.saveDocument(userId, userId, docType, fileUrl, ocrDocType, { deferUntilConfirmed: true });
+
+    // The local folder copy is kept at upload time - it needs this request's file buffer. A rejected
+    // upload's copy is replaced by the next upload into the same slot, and it is never read back.
+    // The folder takes the member's name once a confirmed identity document has written it.
+    // Best-effort - a full disk must never cost the member an upload that already succeeded.
+    try {
+      await documentStorageService.saveMemberDocument({
+        accountId: userId,
+        docType,
+        addressProofType: ocrDocType ?? null,
+        buffer: file.buffer,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+      });
+    } catch (err) {
+      logger.warn({ userId, docType, err }, 'Could not save the local copy of the document, continuing');
+    }
   }
 
   // OCR was attempted (result carries an `extracted` key, even if null) -
@@ -1350,8 +1520,9 @@ async function handleUploadCore({ userId, token, file }) {
       typebotSessionStore.set(userId, {
         sessionId: session.sessionId,
         input: session.input,
-        pendingDocConfirmation: { fileUrl },
-        ...(session.addressProofOcrType !== undefined ? { addressProofOcrType: session.addressProofOcrType } : {}),
+        // Everything confirmDocument() needs to save it on "Yes, confirm".
+        pendingDocConfirmation: { fileUrl, docType, ocrDocType, extracted: result.extracted },
+        ...carryAddressProof(session),
       });
 
       return {
@@ -1365,21 +1536,42 @@ async function handleUploadCore({ userId, token, file }) {
     }
 
     // result.failureReason carries the OCR service's own message (e.g. a wrong-document-type or
-    // low-confidence reason from ocr.choira.io) when runOcrAndPersist caught one - shown as-is, with
+    // low-confidence reason from ocr.choira.io) when runOcr caught one - shown as-is, with
     // no generic line appended, since the OCR service's own wording already tells the member what to
     // do (e.g. "This looks like a cancelled cheque, not a PAN card. Please upload your PAN card.").
     // Falls back to the original generic wording only when there's no failureReason at all
     // (network/timeout failures, or older callers/tests that don't set it).
+    const failureMessage = textMessage(
+      'ocr-extraction-failed',
+      result.failureReason
+        ? `We couldn't verify this ${labelDocType} document:\n${result.failureReason}`
+        : `We couldn't read this ${labelDocType} document clearly. Please upload a clearer, better-quality image.`,
+      // The English above is what an English member reads. For everyone else
+      // the translator rebuilds this bubble from the code, because the OCR
+      // service composes its sentences and none of them is a dictionary key.
+      result.failureOcr ? { ocrFailure: result.failureOcr } : undefined,
+    );
+
+    // An address proof can be any of several documents. Rather than locking the member into the one
+    // they picked first, offer to retry it or switch - the Typebot session stays on this upload.
+    if (isAddressProofUpload && session.addressProofOptions?.length) {
+      typebotSessionStore.set(userId, {
+        sessionId: session.sessionId,
+        input: session.input,
+        pendingAddressProofRetry: true,
+        ...carryAddressProof(session),
+      });
+      return {
+        sessionEnded: false,
+        messages: [failureMessage],
+        input: ADDRESS_PROOF_RETRY_INPUT,
+        progress: resolveProgress(session.input.id),
+      };
+    }
+
     return {
       sessionEnded: false,
-      messages: [
-        textMessage(
-          'ocr-extraction-failed',
-          result.failureReason
-            ? `We couldn't verify this ${labelDocType} document:\n${result.failureReason}`
-            : `We couldn't read this ${labelDocType} document clearly. Please upload a clearer, better-quality image.`,
-        ),
-      ],
+      messages: [failureMessage],
       input: session.input,
       progress: resolveProgress(session.input.id),
     };

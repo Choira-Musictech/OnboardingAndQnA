@@ -15,9 +15,11 @@ import {
   resolveEntityType,
   resolveRegType,
   resolveRollTypeIds,
+  listRoleLabels,
 } from './memberRoleCodes.js';
 import { languageLookupService } from './languageLookup.service.js';
 import { DOC_LOOKUP_ID_BY_PATH } from './documentLookupMap.js';
+import { registrationEmailService } from './registrationEmail.service.js';
 
 const REGISTERED = 1;
 const DOC_TYPES = Object.freeze({
@@ -180,6 +182,24 @@ async function resolveAndPersistBookId(registrationId) {
 // address string. Indian PIN codes are 6 digits, first digit 1-9, and sit at the end of a full
 // address, so take the LAST standalone match rather than the first (a house/flat number earlier in
 // the string could otherwise be mistaken for one).
+/**
+ * The pincode the reader itself answered with, when it is one.
+ *
+ * Every document type returns this field, and for several it is better than
+ * anything derivable from the address: the letter-shaped documents search the
+ * whole page, so they find a code printed in a letterhead or beside a seal that
+ * the address line never carries. One member's address read as "ROOM NO 3
+ * SAWANT CHAWL ... Thane" with no code in it at all.
+ *
+ * Checked rather than trusted. It comes from a recogniser, and shape is the
+ * only thing separating a pincode from any other six digits on the page - so
+ * the same rule the local extractor uses is applied to it.
+ */
+function readerPincode(value) {
+  const digits = String(value ?? '').trim();
+  return /^[1-9]\d{5}$/.test(digits) ? digits : null;
+}
+
 function extractPincode(address) {
   if (typeof address !== 'string') return null;
   const matches = address.match(/\b[1-9]\d{5}\b/g);
@@ -217,7 +237,7 @@ export const ocrProvider = createOcrProvider();
 // The names a song's credits are checked against, split by how much they're worth as evidence.
 //
 // `trusted` are names on file *before* the member ever saw a song's credits: AccountName (written
-// from their identity document, see runOcrAndPersist) and AccountAlias (the stage name asked during
+// from their identity document, see persistExtracted) and AccountAlias (the stage name asked during
 // registration). `claimed` are names the member supplied at the work-link step - i.e. after we
 // showed them the credit list - so a match against one of those is a claim, not a check, and the
 // work link is stored unverified. See AGENTS.md.
@@ -237,6 +257,9 @@ async function getIdentityNames(userId) {
     accountAlias: account.AccountAlias,
     trusted: [account.AccountName, flowAlias].filter((name) => name?.trim()),
     claimed: claimedAliases,
+    // Lyricist/Composer/Both - which of the song's role-labelled credit lists matchCredits()
+    // must check the member's name against (see workMatch.service.js).
+    roleLabels: listRoleLabels(account.RollTypeIds),
   };
 }
 
@@ -319,7 +342,11 @@ export function buildAccountImagePath(accountId, documentUrl) {
 // `ocrDocType` lets a caller run OCR under a different type than the one being saved on the row -
 // used for PERMANENT_ADDRESS_PROOF/CURRENT_ADDRESS_PROOF uploads, where the DB row stays generic
 // but the actual document might be a Driving Licence or Voter ID (see addressProofTypeMap.js).
-async function saveDocument(userId, registrationId, docType, documentUrl, ocrDocType) {
+//
+// `deferUntilConfirmed` is the chat's: when OCR runs, nothing at all is written - neither the
+// account fields OCR read nor the document row - and the caller saves it with confirmDocument() once
+// the member taps "Yes, confirm". The REST route has no confirmation step, so it saves immediately.
+async function saveDocument(userId, registrationId, docType, documentUrl, ocrDocType, { deferUntilConfirmed = false } = {}) {
   assertOwnRegistration(userId, registrationId);
 
   const account = await registrationRepository.findByAccountId(registrationId);
@@ -327,12 +354,45 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
 
   const effectiveOcrType = ocrDocType ?? OCR_TYPE_BY_DOC_TYPE[docType] ?? docType;
   const ocrResult = env.OCR_ENABLED && OCR_DOC_TYPES.includes(effectiveOcrType)
-    ? await runOcrAndPersist(registrationId, effectiveOcrType, documentUrl, docType)
+    ? await runOcr(registrationId, effectiveOcrType, documentUrl, docType)
     : null;
 
-  // DocStatus: 0 = no OCR attempted (NOC/COMPANY_DOC/PROFILE_PHOTO), 1 = OCR-verified, 2 = OCR failed.
-  const docStatus = ocrResult ? (ocrResult.verified ? 1 : 2) : 0;
+  if (ocrResult && deferUntilConfirmed) {
+    return {
+      documentType: docType,
+      documentUrl,
+      verified: ocrResult.verified,
+      extracted: ocrResult.extracted,
+      ...(ocrResult.failureReason ? { failureReason: ocrResult.failureReason } : {}),
+      ...(ocrResult.failureOcr ? { failureOcr: ocrResult.failureOcr } : {}),
+    };
+  }
 
+  if (ocrResult?.extracted) await persistExtracted(registrationId, effectiveOcrType, ocrResult.extracted, docType);
+
+  // OcrStatus: whether OCR ran at all, independent of pass/fail - 0 = true (ran), 1 = false (did not
+  // run). Deliberately the opposite of the usual 0/1 boolean direction; confirmed with the user.
+  // DocStatus is deliberately no longer computed/written - confirmed with the user, OcrStatus is
+  // the only one of the two this app writes to from now on.
+  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, ocrResult ? 0 : 1);
+  return toDocumentPublic(doc, ocrResult);
+}
+
+// Saves a document the member has confirmed in the chat: what OCR read, then the document row.
+async function confirmDocument(userId, registrationId, { docType, documentUrl, ocrDocType, extracted }) {
+  assertOwnRegistration(userId, registrationId);
+
+  const effectiveOcrType = ocrDocType ?? OCR_TYPE_BY_DOC_TYPE[docType] ?? docType;
+  await persistExtracted(registrationId, effectiveOcrType, extracted, docType);
+
+  // Re-read after persistExtracted - a PAN just wrote AccountName, which the row's CreatedBy uses.
+  const account = await registrationRepository.findByAccountId(registrationId);
+  if (!account) throw notFoundError('Registration not found');
+  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, 0);
+  return toDocumentPublic(doc, { verified: true, extracted });
+}
+
+async function writeDocumentRow(account, registrationId, docType, documentUrl, ocrStatus) {
   const pathKey = resolveDocPathKey(account);
   const documentLookupId = pathKey ? DOC_LOOKUP_ID_BY_PATH[pathKey]?.[docType] ?? null : null;
 
@@ -340,7 +400,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     accountId: registrationId,
     caption: docType,
     documentUrl,
-    docStatus,
+    ocrStatus,
     documentLookupId,
     docFileName: buildDocFileName(registrationId, documentLookupId, documentUrl),
     createdBy: account?.AccountName?.trim() || null,
@@ -352,7 +412,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     });
   }
 
-  return toDocumentPublic(doc, ocrResult);
+  return doc;
 }
 
 // Persists a single text/choice conversation answer (GST number, alias/stage
@@ -382,6 +442,12 @@ async function saveConversationField(userId, registrationId, field, value) {
     // The publisher paths never reach the role question, so their RollTypeIds is decided here.
     const publisherRoll = PUBLISHER_ROLL_TYPE_ID_BY_REG_TYPE[regType];
     if (publisherRoll) update.RollTypeIds = publisherRoll;
+  } else if (field === 'TeritoryAppFor') {
+    // IPRS stores these as numeric codes, not the answer text.
+    const upper = trimmed.toUpperCase();
+    const code = upper === 'WORLD' ? '2136' : upper === 'INDIA' ? '0356' : null;
+    if (!code) return;
+    update = { TeritoryAppFor: code };
   } else if (field === 'EntityType') {
     // Their column is a 2-letter code (CP/PR/SP), not the answer text.
     const entityType = resolveEntityType(trimmed);
@@ -588,7 +654,11 @@ export function normalizeExtracted(docType, extracted) {
   return { ...extracted, name: extracted.legalName };
 }
 
-async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlot) {
+// OCR only - reads the document, writes nothing. What it read is saved by persistExtracted(), which
+// the chat calls only after the member confirms the card (see confirmDocument()): a document
+// rejected with "No, re-upload" must never leave its name behind as the reference later uploads
+// are checked against.
+async function runOcr(registrationId, docType, documentUrl, addressSlot) {
   try {
     // addressSlot is the ORIGINAL upload slot before OCR_TYPE_BY_DOC_TYPE's remap (docType is the
     // remapped, effective OCR type) - PAN vs COMPANY_PAN tells the pan endpoint which holder type
@@ -607,100 +677,7 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     // uploaded passbook/cheque is actually in the company's name, same as the individual path
     // verifies its own AccountName against its bank document.
     const holderName = account?.AccountName?.trim() || undefined;
-    const extracted = normalizeExtracted(docType, await ocrProvider.extract({ docType, documentUrl, panHolderType, holderName }));
-
-    if (docType === DOC_TYPES.PAN && extracted.pan) {
-      const panUpdate = { Detail2: extracted.pan };
-      // Write-once, same guard AccountName uses below - a later PAN re-upload shouldn't clobber an
-      // already-confirmed name split.
-      if (extracted.firstName && !account?.FirstName?.trim()) panUpdate.FirstName = extracted.firstName.slice(0, 30);
-      if (extracted.lastName && !account?.LastName?.trim()) panUpdate.LastName = extracted.lastName.slice(0, 45);
-      if (extracted.parentName && !account?.FatherName?.trim()) panUpdate.FatherName = extracted.parentName.slice(0, 100);
-      await registrationRepository.update(registrationId, panUpdate);
-    }
-
-    // The member's name, taken from an identity document. This is the only name in the system with
-    // any evidence behind it - everything else is self-declared - so the work-link credit match
-    // depends on it (see workMatch.service.js).
-    //
-    // Written ONLY when AccountName is still empty. That guard is what makes this safe: the field
-    // was previously left unpersisted because OCR-formatted text could clobber a real name already
-    // on the row. Restricted to identity documents too - an electricity bill's name is often a
-    // landlord's or a parent's, which is evidence of nothing.
-    if (IDENTITY_OCR_DOC_TYPES.includes(docType) && extracted.name && !account?.AccountName?.trim()) {
-      const name = String(extracted.name).trim().slice(0, 100);
-      const nameUpdate = { AccountName: name };
-      // Same "write once" guard as AccountName above - the member's name is the first trustworthy
-      // identity this account has, so it doubles as who created/last-touched the account record.
-      if (!account?.CreatedBy?.trim()) nameUpdate.CreatedBy = name;
-      if (!account?.ModifedBy?.trim()) nameUpdate.ModifedBy = name;
-      await registrationRepository.update(registrationId, nameUpdate);
-    }
-
-    // GST number - Detail1. The company/NRI chat flow has no typed "what's your GST number"
-    // question of its own (that text step, gated by GST_VERIFY_ENABLED, lives on a path this flow
-    // never reaches), so this is the only source Detail1 ever gets filled from. Write-once, same
-    // guard as AccountName/FirstName/LastName above: fires from either GST upload slot (the
-    // required GST_CERTIFICATE doc, or the address-proof GST option), whichever arrives first wins.
-    if (docType === DOC_TYPES.GST && extracted.gstin && !account?.Detail1?.trim()) {
-      await registrationRepository.update(registrationId, { Detail1: extracted.gstin });
-    }
-
-    if (docType === DOC_TYPES.BANK) {
-      const bankUpdate = {};
-      for (const [ocrKey, dbKey] of Object.entries(BANK_FIELD_MAP)) {
-        if (extracted[ocrKey] != null) bankUpdate[dbKey] = extracted[ocrKey];
-      }
-      if (Object.keys(bankUpdate).length > 0) {
-        await registrationRepository.update(registrationId, bankUpdate);
-      }
-    }
-
-    const addressColumn = ADDRESS_COLUMN_BY_SLOT[addressSlot];
-    if (extracted.address && addressColumn) {
-      const addressUpdate = { [addressColumn]: extracted.address };
-      const pincode = extractPincode(extracted.address);
-      if (pincode) addressUpdate[PINCODE_COLUMN_BY_ADDRESS_COLUMN[addressColumn]] = pincode;
-      await registrationRepository.update(registrationId, addressUpdate);
-      // Most members fill the permanent address via a document upload (this branch), not the
-      // manual-typed chat question - BookId's resolution has to fire from here too, not just
-      // saveConversationField's AccountAddress branch, or it silently never runs for them.
-      // Best-effort, same as that call site: a BookId failure (e.g. dbo.GetStateBookId missing on a
-      // deployed DB - confirmed live) is not a document-verification failure and must never be
-      // reported to the member as one, nor block the address that was already saved above.
-      if (addressColumn === 'AccountAddress') {
-        try {
-          await resolveAndPersistBookId(registrationId);
-        } catch (bookIdErr) {
-          // Logged at error level, not warn: a member whose BookId never resolved is a
-          // record someone has to finish by hand, so this needs to be findable. It is
-          // still not a reason to reject a document that read correctly.
-          logger.error(
-            { registrationId, docType, err: bookIdErr },
-            'BookId resolution failed, document kept and address saved',
-          );
-        }
-      }
-    }
-
-    // Whichever doc type happens to extract these - PAN/Passport for dob, Aadhaar/Voter ID for
-    // gender - opportunistically persisted the same way address is above.
-    const dob = parseOcrDate(extracted.dob);
-    if (dob) {
-      await registrationRepository.update(registrationId, { DOB: dob });
-    }
-    if (extracted.gender) {
-      await registrationRepository.update(registrationId, { Gender: extracted.gender });
-    }
-    // Only the passport carries this. The NRI path also asks for nationality in the chat and writes
-    // the same column - last write wins, which is what conversationFieldMap.js already says.
-    if (extracted.nationality) {
-      await registrationRepository.update(registrationId, {
-        Nationality: String(extracted.nationality).trim().slice(0, 100),
-      });
-    }
-    // Aadhaar's extracted number/name/dob/gender/address are intentionally not
-    // persisted to AppAccounts - only used here to compute `verified`.
+    const extracted = normalizeExtracted(docType, await ocrProvider.extract({ docType, documentUrl, panHolderType, holderName, registrationId }));
     return { verified: Boolean(extracted.isValid), extracted };
   } catch (err) {
     logger.warn(
@@ -709,8 +686,118 @@ async function runOcrAndPersist(registrationId, docType, documentUrl, addressSlo
     );
     // Surfaces the OCR service's own message (e.g. a wrong-document-type or low-confidence reason)
     // up to the user-facing failure text in registrationEngine.js, instead of only a generic one.
-    return { verified: false, extracted: null, failureReason: err.errorCode ? err.message || null : null };
+    // failureOcr is the same refusal in machine-readable form. The message above
+    // is the OCR service's English, which is composed at runtime and so matches
+    // no dictionary entry; the translator rebuilds the sentence from this instead.
+    // See modules/translation/ocrMessages.js.
+    return {
+      verified: false,
+      extracted: null,
+      failureReason: err.errorCode ? err.message || null : null,
+      failureOcr: err.details?.ocr ?? null,
+    };
   }
+}
+
+// Writes what OCR read onto the account. Re-reads the row first, so every write-once guard below
+// checks the account as it is now - not as it was when the document was uploaded.
+async function persistExtracted(registrationId, docType, extracted, addressSlot) {
+  if (!extracted) return;
+  const account = await registrationRepository.findByAccountId(registrationId);
+  if (docType === DOC_TYPES.PAN && extracted.pan) {
+    const panUpdate = { Detail2: extracted.pan };
+    // Write-once, same guard AccountName uses below - a later PAN re-upload shouldn't clobber an
+    // already-confirmed name split.
+    if (extracted.firstName && !account?.FirstName?.trim()) panUpdate.FirstName = extracted.firstName.slice(0, 30);
+    if (extracted.lastName && !account?.LastName?.trim()) panUpdate.LastName = extracted.lastName.slice(0, 45);
+    if (extracted.parentName && !account?.FatherName?.trim()) panUpdate.FatherName = extracted.parentName.slice(0, 100);
+    await registrationRepository.update(registrationId, panUpdate);
+  }
+
+  // The member's name, taken from an identity document. This is the only name in the system with
+  // any evidence behind it - everything else is self-declared - so the work-link credit match
+  // depends on it (see workMatch.service.js).
+  //
+  // Written ONLY when AccountName is still empty. That guard is what makes this safe: the field
+  // was previously left unpersisted because OCR-formatted text could clobber a real name already
+  // on the row. Restricted to identity documents too - an electricity bill's name is often a
+  // landlord's or a parent's, which is evidence of nothing.
+  if (IDENTITY_OCR_DOC_TYPES.includes(docType) && extracted.name && !account?.AccountName?.trim()) {
+    const name = String(extracted.name).trim().slice(0, 100);
+    const nameUpdate = { AccountName: name };
+    // Same "write once" guard as AccountName above - the member's name is the first trustworthy
+    // identity this account has, so it doubles as who created/last-touched the account record.
+    if (!account?.CreatedBy?.trim()) nameUpdate.CreatedBy = name;
+    if (!account?.ModifedBy?.trim()) nameUpdate.ModifedBy = name;
+    await registrationRepository.update(registrationId, nameUpdate);
+  }
+
+  // GST number - Detail1. The company/NRI chat flow has no typed "what's your GST number"
+  // question of its own (that text step, gated by GST_VERIFY_ENABLED, lives on a path this flow
+  // never reaches), so this is the only source Detail1 ever gets filled from. Write-once, same
+  // guard as AccountName/FirstName/LastName above: fires from either GST upload slot (the
+  // required GST_CERTIFICATE doc, or the address-proof GST option), whichever arrives first wins.
+  if (docType === DOC_TYPES.GST && extracted.gstin && !account?.Detail1?.trim()) {
+    await registrationRepository.update(registrationId, { Detail1: extracted.gstin });
+  }
+
+  if (docType === DOC_TYPES.BANK) {
+    const bankUpdate = {};
+    for (const [ocrKey, dbKey] of Object.entries(BANK_FIELD_MAP)) {
+      if (extracted[ocrKey] != null) bankUpdate[dbKey] = extracted[ocrKey];
+    }
+    if (Object.keys(bankUpdate).length > 0) {
+      await registrationRepository.update(registrationId, bankUpdate);
+    }
+  }
+
+  const addressColumn = ADDRESS_COLUMN_BY_SLOT[addressSlot];
+  if (extracted.address && addressColumn) {
+    const addressUpdate = { [addressColumn]: extracted.address };
+    // The reader's own answer first; the address is the fallback, which is all
+    // the document types that derive it from the address had anyway.
+    const pincode = readerPincode(extracted.pincode) ?? extractPincode(extracted.address);
+    if (pincode) addressUpdate[PINCODE_COLUMN_BY_ADDRESS_COLUMN[addressColumn]] = pincode;
+    await registrationRepository.update(registrationId, addressUpdate);
+    // Most members fill the permanent address via a document upload (this branch), not the
+    // manual-typed chat question - BookId's resolution has to fire from here too, not just
+    // saveConversationField's AccountAddress branch, or it silently never runs for them.
+    // Best-effort, same as that call site: a BookId failure (e.g. dbo.GetStateBookId missing on a
+    // deployed DB - confirmed live) is not a document-verification failure and must never be
+    // reported to the member as one, nor block the address that was already saved above.
+    if (addressColumn === 'AccountAddress') {
+      try {
+        await resolveAndPersistBookId(registrationId);
+      } catch (bookIdErr) {
+        // Logged at error level, not warn: a member whose BookId never resolved is a
+        // record someone has to finish by hand, so this needs to be findable. It is
+        // still not a reason to reject a document that read correctly.
+        logger.error(
+          { registrationId, docType, err: bookIdErr },
+          'BookId resolution failed, document kept and address saved',
+        );
+      }
+    }
+  }
+
+  // Whichever doc type happens to extract these - PAN/Passport for dob, Aadhaar/Voter ID for
+  // gender - opportunistically persisted the same way address is above.
+  const dob = parseOcrDate(extracted.dob);
+  if (dob) {
+    await registrationRepository.update(registrationId, { DOB: dob });
+  }
+  if (extracted.gender) {
+    await registrationRepository.update(registrationId, { Gender: extracted.gender });
+  }
+  // Only the passport carries this. The NRI path also asks for nationality in the chat and writes
+  // the same column - last write wins, which is what conversationFieldMap.js already says.
+  if (extracted.nationality) {
+    await registrationRepository.update(registrationId, {
+      Nationality: String(extracted.nationality).trim().slice(0, 100),
+    });
+  }
+  // Aadhaar's extracted number/name/dob/gender/address are intentionally not
+  // persisted to AppAccounts - only used to compute `verified`.
 }
 
 async function complete(userId, registrationId) {
@@ -748,16 +835,32 @@ async function complete(userId, registrationId) {
     });
   }
 
-  // Territory defaults to WORLD when the user skipped the flow's territory question (or never
-  // reached it) - an actual INDIA/WORLD answer is already persisted by saveConversationField() and
-  // wins. Done here rather than on the skip itself: the territory blocks have no Typebot skip
-  // option, and registrationEngine.handle() only persists a truthy answer, so there's no skip
-  // event to hook. Idempotent - only fires while the column is still empty.
-  if (!account.TeritoryAppFor?.trim()) {
-    await registrationRepository.update(registrationId, { TeritoryAppFor: 'WORLD' });
+  // Nationality defaults to Indian for the three paths that never ask it (only the NRI path's
+  // chat question and a passport upload write this column) - same idempotent pattern as
+  // TeritoryAppFor's default below.
+  if (!account.Nationality?.trim()) {
+    await registrationRepository.update(registrationId, { Nationality: 'Indian' });
   }
 
-  const updated = account.ApplicationStatus === REGISTERED ? account : await registrationRepository.markCompleted(registrationId);
+  // Territory defaults to WORLD (code 2136) when the user skipped the flow's territory question
+  // (or never reached it) - an actual INDIA/WORLD answer is already persisted by
+  // saveConversationField() (as its numeric code) and wins. Done here rather than on the skip
+  // itself: the territory blocks have no Typebot skip option, and registrationEngine.handle()
+  // only persists a truthy answer, so there's no skip event to hook. Idempotent - only fires
+  // while the column is still empty.
+  if (!account.TeritoryAppFor?.trim()) {
+    await registrationRepository.update(registrationId, { TeritoryAppFor: '2136' });
+  }
+
+  let updated = account;
+  if (account.ApplicationStatus !== REGISTERED) {
+    // complete() is reached from five places, two of which can race on one payment, so only the
+    // call whose conditional update actually flipped the status sends the emails. Not awaited:
+    // a slow SMTP server must not hold up the member's chat or payment response.
+    const firstTime = await registrationRepository.markCompleted(registrationId);
+    updated = await registrationRepository.findByAccountId(registrationId);
+    if (firstTime) registrationEmailService.sendCompletionEmails(updated);
+  }
   return toPublic(updated);
 }
 
@@ -775,6 +878,7 @@ function toDocumentPublic(doc, ocrResult) {
           verified: ocrResult.verified,
           extracted: ocrResult.extracted,
           ...(ocrResult.failureReason ? { failureReason: ocrResult.failureReason } : {}),
+          ...(ocrResult.failureOcr ? { failureOcr: ocrResult.failureOcr } : {}),
         }
       : {}),
   };
@@ -795,6 +899,7 @@ export const registrationService = {
   getIdentityNames,
   getStatus,
   saveDocument,
+  confirmDocument,
   saveConversationField,
   copyPermanentAddressToCurrent,
   isEmailTakenByAnotherAccount,

@@ -43,6 +43,47 @@ function generateTxnId(userId) {
   return `IPRS_${userId}_${Date.now()}_${randomSuffix}`;
 }
 
+// The one-time "you're done" card, shown as a normal chat bubble once registration is genuinely
+// complete (not just paid-for - see the two call sites below). AccountId doubles as the
+// "Application Number" here; IPRS Email ID is the same org-wide support address members are
+// already told to write to, not a per-member mailbox (nothing like that exists in this app).
+//
+// Shown once per account, ever (this process's lifetime) - guards against the same card appearing
+// twice back-to-back when more than one code path reaches "registration is complete" for the same
+// account (a repeat payment-status poll, a session resume via aiEngine, or both in one page load).
+const registrationCompleteNotified = new Set();
+
+function registrationCompleteText(registrationId) {
+  if (registrationCompleteNotified.has(registrationId)) return null;
+  registrationCompleteNotified.add(registrationId);
+  const contact = env.SUPPORT_CONTACT?.trim();
+  const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
+  return (
+    `Thank You for Registration!\n\n` +
+    `Application Number: ${registrationId}${emailLine}\n\n` +
+    `We have sent you a confirmation email from the IPRS team.`
+  );
+}
+
+// Shown on every relogin after the one-time card above has already been shown once - same
+// Application Number / IPRS Email ID block, no once-only guard, and no confirmation-email line
+// (the member was already told that right after paying).
+function welcomeBackText(registrationId) {
+  const contact = env.SUPPORT_CONTACT?.trim();
+  const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
+  return `Welcome back! Your IPRS registration is complete.\n\nApplication Number: ${registrationId}${emailLine}`;
+}
+
+function registrationCompleteMessage(registrationId) {
+  const text = registrationCompleteText(registrationId);
+  if (!text) return null;
+  return {
+    id: 'registration-complete',
+    type: 'text',
+    content: { type: 'richText', richText: [{ type: 'p', children: [{ text }] }] },
+  };
+}
+
 // Default mapping for a row read on its own, with no live gateway check behind it (e.g.
 // getPaymentHistory). PaymentStatus 1 defaults to PENDING rather than FAILED - the row alone
 // can't tell a freshly-initiated attempt from one PayU already told us failed, and reporting
@@ -307,7 +348,11 @@ async function verifyPaymentStatus({ userId, txnId }) {
   }
 
   if (existing.PaymentStatus === REG_PAYMENT_STATUS_CODE.SUCCESS) {
-    return toPublic(existing);
+    const { completed } = await registrationService.getStatus(userId);
+    const result = toPublic(existing);
+    if (!completed) return result;
+    const card = registrationCompleteMessage(userId);
+    return card ? { ...result, messages: [card] } : result;
   }
 
   const check = await payuClient.verifyPayment(txnId);
@@ -329,14 +374,20 @@ async function verifyPaymentStatus({ userId, txnId }) {
       PaidAmount: String(existing.PaymentAmount ?? ''),
     });
 
+    let completed = false;
     try {
       const userIdStr = String(updated.AccountId);
       await registrationService.complete(userIdStr, userIdStr);
+      completed = true;
     } catch {
-      // ignore incomplete requirements
+      // registration genuinely isn't complete yet (missing docs/info) - describePaymentReceived()
+      // already guides the member to contact support on their next chat turn; no error here.
     }
 
-    return toPublic(updated);
+    const result = toPublic(updated);
+    if (!completed) return result;
+    const card = registrationCompleteMessage(userId);
+    return card ? { ...result, messages: [card] } : result;
   }
 
   // PayU confirms this did NOT succeed - tell the caller precisely, but leave the row at 1
@@ -373,6 +424,8 @@ export const paymentService = {
   verifyPaymentStatus,
   getPaymentHistory,
   hasSuccessfulPayment,
+  registrationCompleteText,
+  welcomeBackText,
   PAYMENT_STATUS,
   toPublic,
 };

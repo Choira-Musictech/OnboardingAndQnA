@@ -14,6 +14,7 @@
 // ==================================================================
 import { appError } from '../../../../shared/errors.js';
 import { env } from '../../../../config/env.js';
+import { logger } from '../../../../utils/logger.js';
 
 const DOC_TYPE_PATHS = {
   PAN: 'pan',
@@ -39,12 +40,41 @@ const DOC_TYPE_PATHS = {
 // blanket kill-switch, same shape as OCR_ENABLED, for when this check blocks testing.
 const NAME_VERIFIED_DOC_TYPES = new Set(['DRIVING_LICENCE', 'PASSPORT', 'VOTER_ID', 'BANK', 'GST']);
 
+// Which cross-check fields the registry disagreed with. The service reports
+// these per field as match/mismatch/null inside the verification block; the
+// message only names the ones that actually disagreed.
+function mismatchedFields(body) {
+  const cross = body?.data?.verification?.crossCheck;
+  if (!cross || typeof cross !== 'object') return null;
+  const fields = Object.entries(cross)
+    .filter(([key, value]) => value === 'mismatch' && key !== 'allMatch')
+    .map(([key]) => key);
+  return fields.length ? fields : null;
+}
+
+// What the translator needs to rebuild this refusal in the member's language.
+// Carried alongside the service's own English, which stays for the logs and for
+// English members. Null when the service sent no code - there is nothing to
+// rebuild from, and the English is then all we have.
+function ocrFailureContext(body, docType) {
+  if (!body?.code) return null;
+  return {
+    code: body.code,
+    expectedDocument: body.expectedDocument ?? docType,
+    detectedDocument: body.detectedDocument ?? null,
+    expectedHolderType: body.expectedHolderType ?? null,
+    detectedHolderType: body.detectedHolderType ?? null,
+    fields: mismatchedFields(body),
+    limit: body.limit ?? null,
+  };
+}
+
 export function createHttpOcrProvider() {
   // panHolderType: confirmed with the OCR team (not in the service's own Postman collection) - the
   // `pan` endpoint accepts an optional `type` field, "p" for a person's PAN, "c" for a company's,
   // so it knows which holder type to expect from the card image. Only meaningful for docType=PAN -
   // ignored (and omitted from the request body) for every other doc type.
-  async function extract({ docType, documentUrl, panHolderType, holderName }) {
+  async function extract({ docType, documentUrl, panHolderType, holderName, registrationId }) {
     const path = DOC_TYPE_PATHS[docType];
     if (!path) {
       throw appError(`No OCR endpoint for docType=${docType}`, {
@@ -61,6 +91,9 @@ export function createHttpOcrProvider() {
       requestBody.name = holderName || '';
     }
 
+    // One line per call, success or not, so whether OCR ran - and how long it took - can be read
+    // from the log instead of being inferred from the database afterwards.
+    const startedAt = Date.now();
     let response;
     try {
       response = await fetch(`${env.OCR_API_BASE_URL}/api/documents/${path}`, {
@@ -70,6 +103,10 @@ export function createHttpOcrProvider() {
         signal: AbortSignal.timeout(env.OCR_REQUEST_TIMEOUT_MS),
       });
     } catch (cause) {
+      logger.warn(
+        { registrationId, docType, durationMs: Date.now() - startedAt, reason: cause?.cause?.code ?? cause?.name, message: cause?.message },
+        'OCR call failed - service unreachable',
+      );
       throw appError('OCR service unreachable', { errorCode: 'OCR_EXTRACTION_FAILED', details: { stage: 'ocr_call' }, cause });
     }
 
@@ -80,13 +117,18 @@ export function createHttpOcrProvider() {
     // that reflects whether OCR/verification actually succeeded, so that's the field that decides
     // failure here.
     if (!response.ok || !body?.status) {
+      logger.warn(
+        { registrationId, docType, status: response.status, durationMs: Date.now() - startedAt, code: body?.code, message: body?.message },
+        'OCR call rejected the document',
+      );
       throw appError(body?.message ?? `OCR request failed with status ${response.status}`, {
         statusCode: response.status,
         errorCode: 'OCR_EXTRACTION_FAILED',
-        details: { stage: 'ocr_call', ...body },
+        details: { stage: 'ocr_call', ...body, ocr: ocrFailureContext(body, docType) },
       });
     }
 
+    logger.info({ registrationId, docType, status: response.status, durationMs: Date.now() - startedAt }, 'OCR call succeeded');
     return body.data;
   }
 

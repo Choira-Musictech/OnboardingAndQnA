@@ -1,7 +1,7 @@
 ﻿// ==================================================================
 // Conversation routes.
 // ==================================================================
-import { Router } from 'express';
+import express, { Router } from 'express';
 import multer from 'multer';
 import { validate } from '../../../shared/validate.js';
 import { authenticate } from '../../../middlewares/auth.js';
@@ -18,5 +18,13 @@ const router = Router();
 
 router.post('/message', authenticate, validate(sendMessageSchema), conversationController.sendMessage);
 router.post('/upload', authenticate, upload.single('file'), conversationController.uploadDocument);
+
+// An image arrives here as base64, so it needs more room than a chat message.
+router.post(
+  '/detect-edges',
+  authenticate,
+  express.json({ limit: `${env.MAX_UPLOAD_SIZE_MB}mb` }),
+  conversationController.detectDocumentEdges,
+);
 
 export default router;

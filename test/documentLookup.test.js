@@ -158,6 +158,8 @@ test('saveDocument() on the Individual path writes the confirmed DocumentLookupI
   const saved = await prisma.appAccountsDoc.findFirst({ where: { AccountId: account.AccountId, DocumentName: 'PAN' } });
   assert.equal(saved.DocumentLookupId, 1n);
   assert.equal(saved.DocFileName, `MRU_${userId}_1_N1_pan.jpg`);
+  // PAN always goes through OCR, whether it verifies or not - OcrStatus is 0 (true) either way.
+  assert.equal(saved.OcrStatus, 0);
 });
 
 test('saveDocument() on a docType with no confirmed mapping writes DocumentLookupId null and the plain filename', async (t) => {
@@ -195,6 +197,12 @@ test('saveDocument() on PROFILE_PHOTO also writes AppAccounts.AccountImage in th
 
   const saved = await prisma.appAccounts.findUnique({ where: { AccountId: account.AccountId }, select: { AccountImage: true } });
   assert.equal(saved.AccountImage, `MemberPhoto/MPU_${userId}_selfie.jpg`);
+
+  const doc = await prisma.appAccountsDoc.findFirst({ where: { AccountId: account.AccountId, DocumentName: 'PROFILE_PHOTO' } });
+  // PROFILE_PHOTO never goes through OCR - OcrStatus is 1 (false). DocStatus is no longer written
+  // at all (confirmed with the user) - it stays null on every new document now.
+  assert.equal(doc.OcrStatus, 1);
+  assert.equal(doc.DocStatus, null);
 });
 
 test('saveDocument() on a non-photo docType leaves AccountImage untouched', async (t) => {

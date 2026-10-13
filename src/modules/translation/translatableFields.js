@@ -22,11 +22,14 @@ const TRANSLATABLE_KEYS = new Set([
   // was collected, so an upload step showed a translated question above an
   // English caption.
   'caption', 'label', 'confirmLabel', 'heading', 'subtext',
+  // The AI engine answers with { reply } rather than a messages array, so its
+  // line reached every member in English whatever language they had chosen.
+  'reply',
 ]);
 
 // Subtrees never to descend into. `url` is the link target (translating it
 // breaks the link) and `variableId`/`blockId`/`id` are flow identity.
-const SKIP_KEYS = new Set(['url', 'variableId', 'blockId', 'id', 'type', 'sessionId']);
+const SKIP_KEYS = new Set(['url', 'variableId', 'blockId', 'id', 'type', 'sessionId', 'ocrFailure']);
 
 function isTranslatable(key, value) {
   return typeof value === 'string' && TRANSLATABLE_KEYS.has(key) && value.trim().length > 0;

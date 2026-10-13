@@ -6,6 +6,7 @@ import { badRequestError } from '../../../shared/errors.js';
 import { conversationRouter } from '../services/conversation.router.js';
 import * as registrationEngine from '../engines/registrationEngine.js';
 import { translationService } from '../../translation/translation.service.js';
+import { detectEdges } from '../services/documentEdges.service.js';
 
 // The member picks a language on the first screen; the frontend sends that code on every
 // request. Translating here rather than inside the engines keeps one place to change, and
@@ -41,6 +42,17 @@ export const uploadDocument = async (req, res, next) => {
       file: req.file,
     });
     return ok(res, { data: await translationService.translateConversationPayload(data, languageOf(req)) });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// Between taking the photograph and uploading it: the crop box opens on the
+// document rather than on a fixed rectangle. Answers 200 with detected:false
+// when there is nothing obvious to crop to, because that is not an error.
+export const detectDocumentEdges = async (req, res, next) => {
+  try {
+    return ok(res, { data: await detectEdges(req.body?.image) });
   } catch (err) {
     return next(err);
   }

@@ -138,6 +138,57 @@ test('a bare array of credits is accepted as the first argument', () => {
   assert.equal(matchCredits(['Arijit Singh'], ['Arijit Singh']).matched, true);
 });
 
+// --- role-specific matching (Lyricist / Composer / Both) --------------------
+
+test('a Lyricist-only member matches only against the song\'s lyricist credits', () => {
+  const resolved = { credits: ['Name A', 'Name B'], lyricists: ['Name A'], composers: ['Name B'] };
+
+  assert.equal(matchCredits(resolved, ['Name A'], [], ['Lyricist']).matched, true);
+  // Credited as the composer, not the lyricist - still in the merged `credits`, but that must
+  // no longer be enough for a Lyricist-only member.
+  assert.equal(matchCredits(resolved, ['Name B'], [], ['Lyricist']).matched, false);
+});
+
+test('a Composer-only member matches only against the song\'s composer credits', () => {
+  const resolved = { credits: ['Name A', 'Name B'], lyricists: ['Name A'], composers: ['Name B'] };
+
+  assert.equal(matchCredits(resolved, ['Name B'], [], ['Composer']).matched, true);
+  assert.equal(matchCredits(resolved, ['Name A'], [], ['Composer']).matched, false);
+});
+
+test('a "Both" member must be in the lyricist AND the composer credits, not just one', () => {
+  const resolved = {
+    credits: ['Name A', 'Name B', 'Name C'],
+    lyricists: ['Name A', 'Name C'],
+    composers: ['Name B', 'Name C'],
+  };
+
+  assert.equal(matchCredits(resolved, ['Name C'], [], ['Lyricist', 'Composer']).matched, true);
+  // Only a lyricist on this song, not also the composer.
+  assert.equal(matchCredits(resolved, ['Name A'], [], ['Lyricist', 'Composer']).matched, false);
+  // Only a composer on this song, not also the lyricist.
+  assert.equal(matchCredits(resolved, ['Name B'], [], ['Lyricist', 'Composer']).matched, false);
+});
+
+test('with no role-labelled list at all for the role, the role-blind credits/creditText still work', () => {
+  // An older YouTube video with nothing structured - lyricists/composers are empty arrays, same as
+  // workLinkResolver's roleFields() default - so the member isn't blocked over missing platform
+  // data; the fallback is the ordinary merged-credits/free-text check.
+  const resolved = { credits: ['Name A'], lyricists: [], composers: [] };
+  assert.equal(matchCredits(resolved, ['Name A'], [], ['Lyricist']).matched, true);
+
+  const textOnly = { credits: [], creditText: 'Some Song | Name A | Name B', lyricists: [], composers: [] };
+  assert.equal(matchCredits(textOnly, ['Name A'], [], ['Composer']).matched, true);
+});
+
+test('role-specific matching is opt-in - calls with no roles argument keep today\'s role-blind behavior', () => {
+  const resolved = { credits: ['Name B'], lyricists: ['Name A'], composers: ['Name B'] };
+  // Name B is only a composer, but with no roles passed (e.g. the Publisher paths, which have no
+  // Lyricist/Composer role at all) the merged `credits` list is still what's checked.
+  assert.equal(matchCredits(resolved, ['Name B'], []).matched, true);
+  assert.equal(matchCredits(resolved, ['Name B'], [], []).matched, true);
+});
+
 // --- normalisation ---------------------------------------------------------
 
 test('a full stop becomes a space, not nothing', () => {

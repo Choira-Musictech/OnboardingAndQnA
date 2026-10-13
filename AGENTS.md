@@ -210,6 +210,16 @@ builder API, `bot.builder.choira.io/api/v1/typebots/{id}/publishedTypebot`) — 
 called `basic-details` or `complete` even before this, since no HTTP Request blocks exist in the
 flow to call them.
 
+**Per-member folder copy.** After `saveDocument()` returns, `handleUploadCore()` also writes the
+uploaded bytes to this server's own disk via `documentStorage.service.js`:
+`DOCUMENT_STORAGE_DIR/<NAME>_<AccountId>/<label>.<ext>` (e.g. `pan_card.jpg`,
+`permanent_address_proof-driving_licence.jpg`). The canonical copy is still the one in Typebot's
+storage — Typebot picks its own S3 keys, so per-member folders can only exist in storage this app
+owns. Until `AccountName` is known (it comes from PAN/Aadhaar/passport/GST OCR) the folder is just
+`<AccountId>`; the first upload after a name is on file renames it. A re-upload replaces that
+slot's earlier file. The copy is best-effort (a disk failure is logged, never fails the upload),
+not backfilled for earlier members, and never served over HTTP — these are identity documents.
+
 **`POST /registration/start`, `PATCH /registration/:registrationId/basic-details`, and
 `PUT /registration/status` were removed** — grepped every call site in `src/` and confirmed nothing
 in the live chat flow (or anywhere else internally) ever called them; `registrationId` is just the

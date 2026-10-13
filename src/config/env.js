@@ -53,6 +53,9 @@ const envSchema = z.object({
   // Shown at the pre-payment review when the member says something needs correcting. Optional:
   // blank falls back to "our team will get in touch" rather than printing an empty contact line.
   SUPPORT_CONTACT: z.string().optional(),
+  // Receives the "Successful Registration" notice when a member completes. Blank skips that mail
+  // (the member still gets theirs).
+  IPRS_MEMBERSHIP_EMAIL: z.string().optional(),
 
   SPOTIFY_CLIENT_ID: z.string().optional(),
   SPOTIFY_CLIENT_SECRET: z.string().optional(),
@@ -154,6 +157,11 @@ const envSchema = z.object({
   TYPEBOT_API_TOKEN: z.string().optional(),
   TYPEBOT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
+  // Where each member's uploads are also copied, one folder per member (see
+  // documentStorage.service.js). Blank turns the copy off.
+  DOCUMENT_STORAGE_DIR: z.string().default('uploads/member-documents'),
+  // Also write every log line to this file (e.g. logs/backend.log). Blank = terminal only.
+  LOG_FILE: z.string().optional().default(''),
 
   /* PayU Payment Gateway */
   PAYU_KEY: z.string().optional().default('test_key'),

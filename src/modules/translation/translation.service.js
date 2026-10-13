@@ -22,7 +22,8 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import { getProvider } from './providers.js';
-import { lookupSource } from './dictionary.js';
+import { lookupSource, lookup } from './dictionary.js';
+import { composeOcrMessage } from './ocrMessages.js';
 import { collectTranslatable, applyTranslations } from './translatableFields.js';
 import { messageText, rebuildMessage } from './messageBlocks.js';
 
@@ -111,9 +112,43 @@ export async function translateTexts(texts, targetLanguage) {
  * The conversation payload, with everything the member reads in their language.
  * Returns the payload untouched when there is nothing to do.
  */
+const OCR_FAILURE_LEAD = "We couldn't verify this document:";
+
+/**
+ * A bubble carrying `ocrFailure` is rewritten from that code rather than
+ * translated from its English. The OCR service composes its refusals at
+ * runtime from a document name - ~800 sentences - so none of them is a
+ * dictionary key and the generic pass below would leave every one in English.
+ *
+ * The document type is dropped from the lead-in because the rebuilt sentence
+ * names the document itself; keeping both said it twice.
+ */
+function rebuildOcrFailures(payload, targetLanguage) {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  if (!messages.some((m) => m?.ocrFailure)) return payload;
+
+  const lead = lookup(OCR_FAILURE_LEAD, targetLanguage) ?? OCR_FAILURE_LEAD;
+
+  return {
+    ...payload,
+    messages: messages.map((m) => {
+      if (!m?.ocrFailure) return m;
+      const composed = composeOcrMessage(m.ocrFailure, targetLanguage);
+      // No template for this code yet: leave the English, which is still a
+      // true account of what happened.
+      if (!composed) return m;
+      return { ...m, content: rebuildMessage(m.content, `${lead}\n${composed}`, targetLanguage) };
+    }),
+  };
+}
+
 export async function translateConversationPayload(payload, requestedLanguage) {
   const targetLanguage = resolveTargetLanguage(requestedLanguage);
   if (!targetLanguage || !payload) return payload;
+
+  // Before the generic pass, so the rebuilt sentence is not then looked up and
+  // missed. A bubble this rewrites is already in the member's language.
+  payload = rebuildOcrFailures(payload, targetLanguage);
 
   // Bubbles first, as whole messages: a sentence split across bold/link nodes is
   // only translatable - and only matches the dictionary - when it is joined back up.

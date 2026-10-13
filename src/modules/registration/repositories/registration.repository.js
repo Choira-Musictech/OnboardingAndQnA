@@ -20,10 +20,26 @@ function findByAccountEmail(email) {
   });
 }
 
-function markCompleted(accountId) {
-  return prisma.appAccounts.update({
-    where: { AccountId: BigInt(accountId) },
+// True only for the call that actually moved the account into the completed state. Conditional,
+// so two complete() calls racing (PayU callback + status check) can't both win. NULL is listed
+// explicitly because SQL's <> 1 does not match a NULL ApplicationStatus.
+async function markCompleted(accountId) {
+  const { count } = await prisma.appAccounts.updateMany({
+    where: {
+      AccountId: BigInt(accountId),
+      OR: [{ ApplicationStatus: null }, { ApplicationStatus: { not: 1 } }],
+    },
     data: { ApplicationStatus: 1, Detail10: 'choira', RecordStatus: 1 },
+  });
+  return count === 1;
+}
+
+// EmailId holds the book's verification team - several addresses in one comma-separated field.
+async function findBook(bookId) {
+  if (bookId == null) return null;
+  return prisma.appBookMaster.findUnique({
+    where: { BookID: BigInt(bookId) },
+    select: { BookName: true, EmailId: true },
   });
 }
 
@@ -35,7 +51,10 @@ function update(accountId, data) {
 // AGENTS.md. App_Accounts_Doc has no unique constraint on (AccountId, DocumentName), so a
 // re-upload is handled as a manual find-then-update-or-create rather than a native
 // Prisma upsert (which requires a unique/id field to match on).
-async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, docFileName = null, documentLookupId = null, createdBy = null }) {
+// DocStatus is deliberately no longer written here - OcrStatus (see saveDocument()) is the single
+// source of truth for whether/how OCR went; DocStatus is left alone (stays whatever it already
+// was - null on a brand-new row) rather than being retired from the schema outright.
+async function upsertDocument({ accountId, caption, documentUrl, ocrStatus = 1, docFileName = null, documentLookupId = null, createdBy = null }) {
   const existing = await prisma.appAccountsDoc.findFirst({
     where: { AccountId: BigInt(accountId), DocumentName: caption },
   });
@@ -50,7 +69,7 @@ async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, 
       where: { AccountDocId: existing.AccountDocId },
       data: {
         DocumentCaption: documentUrl,
-        DocStatus: docStatus,
+        OcrStatus: ocrStatus,
         DocFileName: docFileName,
         DocumentLookupId: documentLookupIdValue,
         ModifedDate: new Date(),
@@ -64,7 +83,7 @@ async function upsertDocument({ accountId, caption, documentUrl, docStatus = 0, 
       AccountId: BigInt(accountId),
       DocumentName: caption,
       DocumentCaption: documentUrl,
-      DocStatus: docStatus,
+      OcrStatus: ocrStatus,
       DocFileName: docFileName,
       DocumentLookupId: documentLookupIdValue,
       ...(createdBy ? { CreatedBy: createdBy, ModifedBy: createdBy } : {}),
@@ -80,6 +99,7 @@ export const registrationRepository = {
   findByAccountId,
   findByAccountEmail,
   markCompleted,
+  findBook,
   update,
   upsertDocument,
   findDocumentsByAccountId,

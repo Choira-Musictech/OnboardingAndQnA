@@ -29,6 +29,9 @@ Thumbs.db
 .idea/
 *.swp
 
+# Member documents copied by documentStorage.service.js - identity documents, never commit
+uploads/
+
 # Temp
 coverage/
 .tmp/

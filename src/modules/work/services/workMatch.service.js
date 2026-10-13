@@ -130,12 +130,15 @@ function textContainsName(text, candidate) {
   return new RegExp(`(^|[^a-z0-9])${escapeRegExp(phrase)}([^a-z0-9]|$)`, 'i').test(normalizedText);
 }
 
+function searchList(list, name) {
+  return (Array.isArray(list) ? list.filter(Boolean) : []).find((entry) => namesMatch(name, entry)) ?? null;
+}
+
 function findMatch({ credits, creditText }, names) {
   const candidates = (Array.isArray(names) ? names : [names]).filter((n) => tokens(n).length > 0);
-  const list = Array.isArray(credits) ? credits.filter(Boolean) : [];
 
   for (const candidate of candidates) {
-    const credit = list.find((entry) => namesMatch(candidate, entry));
+    const credit = searchList(credits, candidate);
     if (credit) return { matchedName: candidate, matchedCredit: credit };
 
     if (creditText && textContainsName(creditText, candidate)) {
@@ -146,19 +149,58 @@ function findMatch({ credits, creditText }, names) {
   return null;
 }
 
-// matchCredits(resolved, trustedNames, claimedNames)
-//   resolved: { credits: string[], creditText?: string } - workLinkResolver's shape
+// Which role-labelled list on `resolved` a required role searches - workLinkResolver's
+// roleFields() puts these there (empty arrays when the credits service had nothing).
+function roleListFor(resolved, role) {
+  if (role === 'Lyricist') return resolved?.lyricists;
+  if (role === 'Composer') return resolved?.composers;
+  return null;
+}
+
+// One name against one required role (Lyricist/Composer). If the song has role-labelled data for
+// this role, the match must come from that specific list - a composer credit no longer counts for
+// a Lyricist-only member, even though it's still in the merged `credits`. If the song has NO
+// role-labelled data at all for this role (an older YouTube video with only a title, say), fall
+// back to the ordinary role-blind credits/creditText search rather than blocking the member over
+// missing platform data - confirmed with the user.
+function findRoleMatch(resolved, role, name) {
+  const list = roleListFor(resolved, role);
+  if (Array.isArray(list) && list.length > 0) {
+    const credit = searchList(list, name);
+    return credit ? { matchedName: name, matchedCredit: credit } : null;
+  }
+  return findMatch(resolved, name);
+}
+
+// matchCredits(resolved, trustedNames, claimedNames, roles)
+//   resolved: { credits: string[], creditText?: string, lyricists?: string[], composers?: string[] }
+//   roles: the confirming member's own roles, e.g. ['Lyricist'], ['Composer'], or both for "Both"
+//          (memberRoleCodes.js's listRoleLabels()) - omit/empty for the old role-blind check
+//          (the Publisher paths have no Lyricist/Composer role at all).
 // -> { matched, trust, matchedName, matchedCredit }
 //
 // Trusted names are tried first so a member who *is* on file is never downgraded just because they
-// also happen to have an alias stored.
-export function matchCredits(resolved, trustedNames, claimedNames = []) {
+// also happen to have an alias stored. Every name on file (trusted, then claimed) is tried against
+// every required role - "Both" means the SAME name must satisfy both roles, not just appear once.
+export function matchCredits(resolved, trustedNames, claimedNames = [], roles = []) {
   const source = Array.isArray(resolved) ? { credits: resolved } : (resolved ?? { credits: [] });
+  const requiredRoles = Array.isArray(roles) ? roles.filter(Boolean) : [];
 
-  const trusted = findMatch(source, trustedNames);
+  function tryNames(names) {
+    if (requiredRoles.length === 0) return findMatch(source, names);
+
+    const candidates = (Array.isArray(names) ? names : [names]).filter((n) => tokens(n).length > 0);
+    for (const candidate of candidates) {
+      const perRole = requiredRoles.map((role) => findRoleMatch(source, role, candidate));
+      if (perRole.every(Boolean)) return { matchedName: candidate, matchedCredit: perRole[0].matchedCredit };
+    }
+    return null;
+  }
+
+  const trusted = tryNames(trustedNames);
   if (trusted) return { matched: true, trust: MATCH_TRUST.TRUSTED, ...trusted };
 
-  const claimed = findMatch(source, claimedNames);
+  const claimed = tryNames(claimedNames);
   if (claimed) return { matched: true, trust: MATCH_TRUST.CLAIMED, ...claimed };
 
   return { matched: false, trust: MATCH_TRUST.NONE, matchedName: null, matchedCredit: null };
