@@ -101,13 +101,13 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   TRANSLATION_PROVIDER: z.enum(['dictionary', 'gemini', 'google']).default('dictionary'),
-  // JSON file of { "English phrase": { "hi": "...", "mr": "...", "gu": "..." } } used by
+  // JSON file of { "English phrase": { "hi": "...", "mr": "...", "gu": "...", "bn": "...", "ur": "...", "ta": "...", "kn": "..." } } used by
   // the 'dictionary' provider. Written once for the flow's fixed wording.
   TRANSLATION_DICTIONARY_PATH: z.string().optional(),
   // The language the Typebot flow itself is written in - never translated to.
   TRANSLATION_SOURCE_LANGUAGE: z.string().default('en'),
   // Must match the codes the frontend offers (src/constants/languages.js).
-  TRANSLATION_SUPPORTED_LANGUAGES: z.string().default('en,hi,mr,gu,bn'),
+  TRANSLATION_SUPPORTED_LANGUAGES: z.string().default('en,hi,mr,gu,bn,ur,ta,kn'),
   TRANSLATION_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   TRANSLATION_CACHE_MAX: z.coerce.number().int().positive().default(5000),
   // Defaults to GEMINI_MODEL when blank.
