@@ -380,7 +380,7 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
   // run). Deliberately the opposite of the usual 0/1 boolean direction; confirmed with the user.
   // DocStatus is deliberately no longer computed/written - confirmed with the user, OcrStatus is
   // the only one of the two this app writes to from now on.
-  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, ocrResult ? 0 : 1);
+  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, ocrResult ? 0 : 1, ocrResult?.extracted ?? null);
   return toDocumentPublic(doc, ocrResult);
 }
 
@@ -394,11 +394,11 @@ async function confirmDocument(userId, registrationId, { docType, documentUrl, o
   // Re-read after persistExtracted - a PAN just wrote AccountName, which the row's CreatedBy uses.
   const account = await registrationRepository.findByAccountId(registrationId);
   if (!account) throw notFoundError('Registration not found');
-  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, 0);
+  const doc = await writeDocumentRow(account, registrationId, docType, documentUrl, 0, extracted ?? null);
   return toDocumentPublic(doc, { verified: true, extracted });
 }
 
-async function writeDocumentRow(account, registrationId, docType, documentUrl, ocrStatus) {
+async function writeDocumentRow(account, registrationId, docType, documentUrl, ocrStatus, extracted = null) {
   const pathKey = resolveDocPathKey(account);
   const documentLookupId = pathKey ? DOC_LOOKUP_ID_BY_PATH[pathKey]?.[docType] ?? null : null;
 
@@ -410,6 +410,11 @@ async function writeDocumentRow(account, registrationId, docType, documentUrl, o
     documentLookupId,
     docFileName: buildDocFileName(registrationId, documentLookupId, documentUrl),
     createdBy: account?.AccountName?.trim() || null,
+    // Everything the reader returned, not just the handful of fields that have their
+    // own columns. The confirmation card shows the PAN number, the IFSC, the MICR -
+    // none of which is stored anywhere else - so without this a resumed chat can show
+    // the document but never what was read from it.
+    ocrExtract: extracted ? JSON.stringify(extracted) : null,
   });
 
   if (docType === DOC_TYPES.PROFILE_PHOTO) {

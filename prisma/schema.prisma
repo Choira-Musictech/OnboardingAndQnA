@@ -181,6 +181,10 @@ model AppAccountsDoc {
   // Whether OCR ran for this document at all, independent of DocStatus's pass/fail detail.
   // Deliberately 0 = true (OCR attempted), 1 = false (no OCR attempted) - confirmed with the user.
   OcrStatus        Int?      @db.TinyInt
+  // The OCR service's full extraction, as JSON. Kept so the "we extracted
+  // the following details" card can be rebuilt when a member resumes;
+  // most of its fields live nowhere else.
+  OcrExtract       String?   @db.NVarChar(Max)
   DocumentCaption  String?   @db.NVarChar(500)
   DocFileName      String?   @db.NVarChar(100)
   DocUploadDesc    String?   @db.NVarChar(100)

@@ -12,6 +12,7 @@ import { badRequestError } from '../../../shared/errors.js';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
 import { registrationService, OCR_TYPE_BY_DOC_TYPE } from '../../registration/services/registration.service.js';
+import { registrationRepository } from '../../registration/repositories/registration.repository.js';
 import { typebotClient, isDeadSessionError } from '../services/typebot/typebotClient.js';
 import { typebotSessionStore } from '../services/typebot/typebotSessionStore.js';
 import { resolveDocumentType } from '../services/typebot/documentTypeMap.js';
@@ -480,6 +481,56 @@ async function offerResume(userId) {
 // Opens a fresh chat on the published flow and feeds the member's own answers back into it until it
 // is asking what it was asking when they left. See conversationJournal.service.js for why this is a
 // replay rather than a jump, and why it must not go back through handle().
+/**
+ * Put the "we extracted the following details" card back under each document the
+ * member uploaded.
+ *
+ * Replay runs the flow through Typebot, so the transcript carries Typebot's bubbles
+ * and the member's answers - but this card is built here, at upload time, and never
+ * reaches the journal. Rebuilt from App_Accounts_Doc.OcrExtract, matched to the turn
+ * by the uploaded URL, which is the one thing both sides hold.
+ *
+ * Best effort by design: a document saved before OcrExtract existed, one uploaded
+ * without OCR, or a row whose JSON will not parse simply contributes no card. The
+ * resumed chat is still correct without it, and a resume must not fail over a
+ * cosmetic bubble.
+ */
+async function withExtractedDetails(transcript, userId) {
+  if (!Array.isArray(transcript) || !transcript.length) return transcript;
+  const hasUpload = transcript.some((e) => e?.sender === 'user' && e.attachedFileUrls?.length);
+  if (!hasUpload) return transcript;
+
+  let byUrl = new Map();
+  try {
+    const docs = await registrationRepository.findDocumentsByAccountId(userId);
+    byUrl = new Map(docs.filter((d) => d.DocumentCaption).map((d) => [d.DocumentCaption, d]));
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read documents while rebuilding the resumed transcript');
+    return transcript;
+  }
+
+  const out = [];
+  for (const entry of transcript) {
+    out.push(entry);
+    const url = entry?.sender === 'user' ? entry.attachedFileUrls?.[0] : null;
+    const doc = url ? byUrl.get(url) : null;
+    if (!doc?.OcrExtract) continue;
+    let extracted;
+    try {
+      extracted = JSON.parse(doc.OcrExtract);
+    } catch {
+      continue;
+    }
+    // Only the two information bubbles - the "Is this correct?" prompt belongs to a
+    // question the member already answered, and asking it again would be a lie.
+    const [intro, values] = buildOcrConfirmationMessages(doc.DocumentName, extracted);
+    if (values?.content?.richText?.length) {
+      out.push({ sender: 'bot', ...intro }, { sender: 'bot', ...values });
+    }
+  }
+  return out;
+}
+
 async function resumeFromJournal({ userId, token }) {
   const turns = await conversationJournalService.loadJournal(userId);
   const startResponse = await typebotClient.startChat({
@@ -541,7 +592,7 @@ async function resumeFromJournal({ userId, token }) {
   // partial restore says anything, because the questions really did change under them.
   return {
     sessionEnded: false,
-    history: transcript,
+    history: await withExtractedDetails(transcript, userId),
     messages: [
       ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
       ...(response.messages ?? []),
