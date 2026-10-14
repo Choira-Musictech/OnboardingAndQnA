@@ -78,3 +78,13 @@ test('complete() leaves an already-answered Nationality/TeritoryAppFor alone', a
   assert.ok(!updates.some((u) => 'Nationality' in u), 'an existing Nationality must not be overwritten');
   assert.ok(!updates.some((u) => 'TeritoryAppFor' in u), 'an existing TeritoryAppFor must not be overwritten');
 });
+
+test('complete() fills an empty BankAccountName from AccountName', async () => {
+  const updates = await runComplete({ AccountName: 'UDAY RAJKUMAR SINGH', BankAccountName: null });
+  assert.deepEqual(updates.find((u) => 'BankAccountName' in u), { BankAccountName: 'UDAY RAJKUMAR SINGH' });
+});
+
+test('complete() leaves a BankAccountName read from the bank document alone', async () => {
+  const updates = await runComplete({ AccountName: 'UDAY RAJKUMAR SINGH', BankAccountName: 'UDAY R SINGH' });
+  assert.ok(!updates.some((u) => 'BankAccountName' in u), 'the bank document\'s name must not be overwritten');
+});

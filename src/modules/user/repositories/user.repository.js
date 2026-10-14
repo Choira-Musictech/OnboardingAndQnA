@@ -21,8 +21,9 @@ function findByEmail(email) {
   return prisma.appAccounts.findFirst({ where: { AccountEmail: email } });
 }
 
+// ModifedDate only gets a value from the SQL default at insert, so every update stamps it itself.
 function update(accountId, data) {
-  return prisma.appAccounts.update({ where: { AccountId: BigInt(accountId) }, data });
+  return prisma.appAccounts.update({ where: { AccountId: BigInt(accountId) }, data: { ModifedDate: new Date(), ...data } });
 }
 
 function findByPhone(phone) {

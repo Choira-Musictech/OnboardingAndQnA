@@ -18,6 +18,7 @@ const router = Router();
 
 router.post('/message', authenticate, validate(sendMessageSchema), conversationController.sendMessage);
 router.post('/upload', authenticate, upload.single('file'), conversationController.uploadDocument);
+router.get('/languages', authenticate, conversationController.listLanguages);
 
 // An image arrives here as base64, so it needs more room than a chat message.
 router.post(

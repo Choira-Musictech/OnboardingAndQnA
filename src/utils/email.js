@@ -15,7 +15,9 @@ function getTransport() {
   // Verify connection configuration lazily (don't throw at import time)
   transport.verify((err, success) => {
     if (err) {
-      logger.warn({ err: err.message, opts }, 'SMTP verify failed');
+      // Never log the password: the options carry it, and the log now also goes to a file.
+      const safeOpts = { ...opts, auth: opts.auth ? { user: opts.auth.user } : undefined };
+      logger.warn({ err: err.message, opts: safeOpts }, 'SMTP verify failed');
     } else {
       logger.debug('SMTP transporter verified');
     }
@@ -48,6 +50,6 @@ export function createSmtpOptions() {
     auth: env.SMTP_USER && env.SMTP_PASSWORD ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined,
     requireTLS: !env.SMTP_SECURE,
     tls: { rejectUnauthorized: env.isProd },
-    connectionTimeout: 10_000,
+    connectionTimeout: 30_000,
   };
 }

@@ -29,7 +29,7 @@ async function markCompleted(accountId) {
       AccountId: BigInt(accountId),
       OR: [{ ApplicationStatus: null }, { ApplicationStatus: { not: 1 } }],
     },
-    data: { ApplicationStatus: 1, Detail10: 'choira', RecordStatus: 1 },
+    data: { ApplicationStatus: 1, Detail10: 'choira', RecordStatus: 1, ModifedDate: new Date() },
   });
   return count === 1;
 }
@@ -43,8 +43,9 @@ async function findBook(bookId) {
   });
 }
 
+// ModifedDate only gets a value from the SQL default at insert, so every update stamps it itself.
 function update(accountId, data) {
-  return prisma.appAccounts.update({ where: { AccountId: BigInt(accountId) }, data });
+  return prisma.appAccounts.update({ where: { AccountId: BigInt(accountId) }, data: { ModifedDate: new Date(), ...data } });
 }
 
 // `DocumentName` holds the document type ("PAN"), `DocumentCaption` holds the S3 URL - see

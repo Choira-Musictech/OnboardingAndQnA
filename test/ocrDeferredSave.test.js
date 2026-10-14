@@ -96,3 +96,39 @@ test('a document with no OCR is saved straight away even from the chat', async (
   assert.equal(rows.length, 1);
   assert.equal(rows[0].ocrStatus, 1);
 });
+
+// --- BankAccountName ----------------------------------------------------------
+
+async function confirmBank(bankResult) {
+  ocrProvider.extract = async ({ docType, documentUrl, holderName }) => {
+    extractCalls.push({ docType, holderName });
+    return docType === 'BANK' ? bankResult : PAN_OF[documentUrl];
+  };
+  const pan = await registrationService.saveDocument(USER, USER, 'PAN', 'https://s3/mine.jpg', undefined, { deferUntilConfirmed: true });
+  await registrationService.confirmDocument(USER, USER, { docType: 'PAN', documentUrl: 'https://s3/mine.jpg', extracted: pan.extracted });
+  const bank = await registrationService.saveDocument(USER, USER, 'BANK', 'https://s3/passbook.jpg', undefined, { deferUntilConfirmed: true });
+  return bank;
+}
+
+test('a confirmed bank document stores the holder name the OCR read', async (t) => {
+  if (!env.OCR_ENABLED) return t.skip('OCR_ENABLED is off');
+  const bank = await confirmBank({ bankName: 'UNION BANK', accountHolder: ' UDAY R SINGH ', isValid: true });
+  await registrationService.confirmDocument(USER, USER, { docType: 'BANK', documentUrl: 'https://s3/passbook.jpg', extracted: bank.extracted });
+
+  assert.equal(account.BankAccountName, 'UDAY R SINGH');
+});
+
+test('with no holder name from the OCR, BankAccountName falls back to AccountName', async (t) => {
+  if (!env.OCR_ENABLED) return t.skip('OCR_ENABLED is off');
+  const bank = await confirmBank({ bankName: 'UNION BANK', isValid: true });
+  await registrationService.confirmDocument(USER, USER, { docType: 'BANK', documentUrl: 'https://s3/passbook.jpg', extracted: bank.extracted });
+
+  assert.equal(account.BankAccountName, 'UDAY SINGH');
+});
+
+test('an unconfirmed bank document does not write BankAccountName', async (t) => {
+  if (!env.OCR_ENABLED) return t.skip('OCR_ENABLED is off');
+  await confirmBank({ bankName: 'UNION BANK', accountHolder: 'UDAY R SINGH', isValid: true });
+
+  assert.equal(account.BankAccountName, undefined);
+});
