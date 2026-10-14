@@ -45,22 +45,25 @@ function generateTxnId(userId) {
 
 // The one-time "you're done" card, shown as a normal chat bubble once registration is genuinely
 // complete (not just paid-for - see the two call sites below). AccountId doubles as the
-// "Application Number" here; IPRS Email ID is the same org-wide support address members are
-// already told to write to, not a per-member mailbox (nothing like that exists in this app).
+// "Application Number" here; IPRS Email ID is IPRS's one membership address (IPRS_CONTACT_EMAIL),
+// not a per-member mailbox.
 //
 // Shown once per account, ever (this process's lifetime) - guards against the same card appearing
 // twice back-to-back when more than one code path reaches "registration is complete" for the same
 // account (a repeat payment-status poll, a session resume via aiEngine, or both in one page load).
 const registrationCompleteNotified = new Set();
 
+function emailLine() {
+  const contact = env.IPRS_CONTACT_EMAIL?.trim();
+  return contact ? `\nIPRS Email ID: ${contact}` : '';
+}
+
 function registrationCompleteText(registrationId) {
   if (registrationCompleteNotified.has(registrationId)) return null;
   registrationCompleteNotified.add(registrationId);
-  const contact = env.SUPPORT_CONTACT?.trim();
-  const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
   return (
     `Thank You for Registration!\n\n` +
-    `Application Number: ${registrationId}${emailLine}\n\n` +
+    `Application Number: ${registrationId}${emailLine()}\n\n` +
     `We have sent you a confirmation email from the IPRS team.`
   );
 }
@@ -69,9 +72,7 @@ function registrationCompleteText(registrationId) {
 // Application Number / IPRS Email ID block, no once-only guard, and no confirmation-email line
 // (the member was already told that right after paying).
 function welcomeBackText(registrationId) {
-  const contact = env.SUPPORT_CONTACT?.trim();
-  const emailLine = contact ? `\nIPRS Email ID: ${contact}` : '';
-  return `Welcome back! Your IPRS registration is complete.\n\nApplication Number: ${registrationId}${emailLine}`;
+  return `Welcome back! Your IPRS registration is complete.\n\nApplication Number: ${registrationId}${emailLine()}`;
 }
 
 function registrationCompleteMessage(registrationId) {

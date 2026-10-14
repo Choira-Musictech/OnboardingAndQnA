@@ -53,6 +53,8 @@ const envSchema = z.object({
   // Shown at the pre-payment review when the member says something needs correcting. Optional:
   // blank falls back to "our team will get in touch" rather than printing an empty contact line.
   SUPPORT_CONTACT: z.string().optional(),
+  // The one IPRS address shown as "IPRS Email ID" on the registration-complete card and the welcome back.
+  IPRS_CONTACT_EMAIL: z.string().default('membership@iprs.org'),
   // Receives the "Successful Registration" notice when a member completes. Blank skips that mail
   // (the member still gets theirs).
   IPRS_MEMBERSHIP_EMAIL: z.string().optional(),

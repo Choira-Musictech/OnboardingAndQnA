@@ -7,6 +7,7 @@ import { conversationRouter } from '../services/conversation.router.js';
 import * as registrationEngine from '../engines/registrationEngine.js';
 import { translationService } from '../../translation/translation.service.js';
 import { detectEdges } from '../services/documentEdges.service.js';
+import { languageLookupService } from '../../registration/services/languageLookup.service.js';
 
 // The member picks a language on the first screen; the frontend sends that code on every
 // request. Translating here rather than inside the engines keeps one place to change, and
@@ -42,6 +43,16 @@ export const uploadDocument = async (req, res, next) => {
       file: req.file,
     });
     return ok(res, { data: await translationService.translateConversationPayload(data, languageOf(req)) });
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// The mother-tongue picker's choices: IPRS's own App_Language_Lookup, each as the label the member
+// sends back (`Hindi(हिन्दी)`). Not translated - the labels are the stored values.
+export const listLanguages = async (req, res, next) => {
+  try {
+    return ok(res, { data: { languages: await languageLookupService.listLanguages() } });
   } catch (err) {
     return next(err);
   }

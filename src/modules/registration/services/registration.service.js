@@ -462,10 +462,12 @@ async function saveConversationField(userId, registrationId, field, value) {
     if (!ids) return;
     update = { RollTypeIds: ids };
   } else if (field === 'LanguageName') {
-    // Unlike RollTypeIds/EntityType/AccountRegType, this one really is free text - see
-    // languageLookup.service.js. The member's own words always get stored; LanguageId only on a
-    // confident match against IPRS's App_Language_Lookup, never guessed.
-    update = { LanguageName: trimmed, LanguageId: await languageLookupService.resolveLanguageId(trimmed) };
+    // The chat's picker sends a label from IPRS's App_Language_Lookup - `LanguageName(NativeName)`,
+    // see languageLookup.service.js - which is stored as-is with its LanguageId. A plain name from
+    // another client resolves to the same label. Anything that matches no row is kept as the
+    // member's own words with no LanguageId, never guessed.
+    const language = await languageLookupService.resolveLanguage(trimmed);
+    update = { LanguageName: language?.label ?? trimmed, LanguageId: language?.id ?? null };
   } else if (field === 'AccountAddress' || field === 'AccountAddress_PR') {
     update = { [field]: trimmed };
     const pincode = extractPincode(trimmed);
@@ -746,6 +748,9 @@ async function persistExtracted(registrationId, docType, extracted, addressSlot)
     for (const [ocrKey, dbKey] of Object.entries(BANK_FIELD_MAP)) {
       if (extracted[ocrKey] != null) bankUpdate[dbKey] = extracted[ocrKey];
     }
+    // The name printed on the cheque/passbook when the OCR reads one, else the member's own name.
+    const holder = extracted.accountHolder?.trim() || account?.AccountName?.trim();
+    if (holder) bankUpdate.BankAccountName = holder.slice(0, 100); // VarChar(100)
     if (Object.keys(bankUpdate).length > 0) {
       await registrationRepository.update(registrationId, bankUpdate);
     }
@@ -840,6 +845,12 @@ async function complete(userId, registrationId) {
   // TeritoryAppFor's default below.
   if (!account.Nationality?.trim()) {
     await registrationRepository.update(registrationId, { Nationality: 'Indian' });
+  }
+
+  // BankAccountName is normally set when the bank document is confirmed. If that saved no name
+  // (AccountName not known yet then, or the bank OCR never ran), fall back to the member's name.
+  if (!account.BankAccountName?.trim() && account.AccountName?.trim()) {
+    await registrationRepository.update(registrationId, { BankAccountName: account.AccountName.trim().slice(0, 100) });
   }
 
   // Territory defaults to WORLD (code 2136) when the user skipped the flow's territory question

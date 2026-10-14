@@ -62,6 +62,8 @@ import {
   MAX_EMAIL_CHANGES,
 } from '../services/emailOtpGate.js';
 import { isAddressProofTypeStep, resolveAddressProofOcrType, isManualAddressAnswer } from '../services/typebot/addressProofTypeMap.js';
+import { isMotherTongueStep } from '../services/typebot/languageGate.js';
+import { languageLookupService } from '../../registration/services/languageLookup.service.js';
 import { conversationJournalService, REPLAY_STOP } from '../services/conversationJournal.service.js';
 import { matchVerifyStep, verifyValue, describeVerifyFailure, describeVerifyError } from '../services/typebot/verifyGate.js';
 
@@ -1233,6 +1235,20 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
       input: EMAIL_OTP_INPUT,
       progress: resolveProgress(existing.input.id),
     };
+  }
+
+  // The mother-tongue step takes a language from IPRS's own list, never free text: the chat's picker
+  // offers only those, so anything else is a stray or non-picker client, and relaying it would save
+  // words with no LanguageId. Ask again instead (see languageGate.js).
+  if (existing?.input && message && isMotherTongueStep(existing.input.options?.variableId)) {
+    if (!(await languageLookupService.resolveLanguage(message))) {
+      return {
+        sessionEnded: false,
+        messages: [textMessage('mother-tongue-not-in-list', 'Please choose your mother tongue from the list.')],
+        input: existing.input,
+        progress: resolveProgress(existing.input.id),
+      };
+    }
   }
 
   // Typebot's own widget puts the file URL(s) in `text` too (not just
