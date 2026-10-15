@@ -14,7 +14,7 @@ process.env.TRANSLATION_ENABLED = 'true';
 // credential here. The dictionary provider is covered in translationDictionary.test.js.
 process.env.TRANSLATION_PROVIDER = 'gemini';
 process.env.TRANSLATION_DICTIONARY_PATH = '';
-process.env.TRANSLATION_SUPPORTED_LANGUAGES = 'en,hi,mr,gu';
+process.env.TRANSLATION_SUPPORTED_LANGUAGES = 'en,hi,mr,gu,te,or';
 process.env.GEMINI_API_KEY = '';
 process.env.GOOGLE_TRANSLATE_API_KEY = '';
 process.env.GOOGLE_TRANSLATE_TOKEN = '';
@@ -107,6 +107,8 @@ test('resolveTargetLanguage answers null for every do-nothing case', () => {
   assert.equal(resolveTargetLanguage('fr'), null, 'not in the supported list');
   assert.equal(resolveTargetLanguage('hi'), 'hi');
   assert.equal(resolveTargetLanguage('  HI  '), 'hi', 'case and spacing are forgiven');
+  assert.equal(resolveTargetLanguage('te'), 'te');
+  assert.equal(resolveTargetLanguage('or'), 'or');
 });
 
 test('an unconfigured provider leaves the text in English instead of failing', async () => {

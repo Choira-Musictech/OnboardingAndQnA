@@ -19,7 +19,7 @@
 // hot-reload.
 //
 // Two deliberate choices:
-//   - {article} has no equivalent in hi/mr/gu/bn/ur/ta/kn. A translated template simply
+//   - {article} has no equivalent in hi/mr/gu/bn/ur/ta/kn/te/or. A translated template simply
 //     leaves the slot out and it disappears. This is the thing that cannot be
 //     done by translating finished English sentences.
 //   - Codes a member cannot act on (a malformed request, a blocked URL - bugs
