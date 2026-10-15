@@ -606,8 +606,29 @@ async function resumeFromJournal({ userId, token }) {
   };
 }
 
+// Re-serves the step the member is on after a language switch. The controller translates whatever
+// comes back, so replaying the journal is enough: it redraws the conversation so far and lands on
+// the live question, in the new language, without the "continue or start over" choice. Null when
+// nothing is journalled yet - the caller then starts a normal chat, which is the first question and
+// needs no resume decision either.
+async function relocalizeCurrentStep({ userId, token, existing }) {
+  // Still looking at the offer itself: show it again rather than answering it on their behalf.
+  if (existing?.pendingResumeChoice) return offerResume(userId);
+
+  let turns = 0;
+  try {
+    turns = await conversationJournalService.countTurns(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read the journal to re-serve the step - starting a normal chat');
+    return null;
+  }
+  if (turns === 0) return null;
+
+  return resumeFromJournal({ userId, token });
+}
+
 /**
- * @param {{ userId: string, token: string, message?: string, attachedFileUrls?: string[] }} input
+ * @param {{ userId: string, token: string, message?: string, attachedFileUrls?: string[], relocalize?: boolean }} input
  */
 export async function handle(args) {
   const result = await handleCore(args);
@@ -620,7 +641,7 @@ export async function handle(args) {
   return { ...result, isPaymentStep: isPaymentStep(result.input?.id) };
 }
 
-async function handleCore({ userId, token, message, attachedFileUrls }) {
+async function handleCore({ userId, token, message, attachedFileUrls, relocalize }) {
   // A blank message is not an answer to anything - Typebot rejects empty text on every input type,
   // and the validator lets `message: ""` through, so a client that always sends the field (Apidog,
   // a form that posts an empty box) would otherwise be treated as if it had said something. Every
@@ -630,6 +651,15 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
   if (typeof message === 'string' && !message.trim()) message = undefined;
 
   let existing = typebotSessionStore.get(userId);
+
+  // The member just switched language. The empty call that follows is not a fresh start, so it must
+  // not hit the stale-session discard or the resume offer below - they asked to read the same
+  // question in another language, not to choose between continuing and starting over.
+  if (relocalize && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
+    const sameStep = await relocalizeCurrentStep({ userId, token, existing });
+    if (sameStep) return sameStep;
+  }
+
   let bypassEmailGate = false;
   let bypassWorkLinkSave = false;
   // Something to tell the member about their work link while the conversation moves past the step -

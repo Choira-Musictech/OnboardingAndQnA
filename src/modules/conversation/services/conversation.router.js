@@ -10,13 +10,13 @@ import * as aiEngine from '../engines/aiEngine.js';
 import * as registrationEngine from '../engines/registrationEngine.js';
 
 export function createConversationRouter() {
-  async function route({ userId, token, message, attachedFileUrls }) {
+  async function route({ userId, token, message, attachedFileUrls, relocalize }) {
     const user = await userRepository.findById(userId);
 
     const isRegistered = user?.ApplicationStatus === 1;
     const engine = isRegistered ? aiEngine : registrationEngine;
 
-    const result = await engine.handle({ userId, token, message, attachedFileUrls });
+    const result = await engine.handle({ userId, token, message, attachedFileUrls, relocalize });
     return {
       engine: isRegistered ? 'AI' : 'REGISTRATION',
       ...result,
