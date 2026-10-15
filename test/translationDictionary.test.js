@@ -130,3 +130,17 @@ test('a message carrying a live value matches one stored entry', () => {
   assert.match(forNirnay, /gmail\.com पर/, 'the sentence after the address is kept');
   assert.equal(lookup('Totally unknown sentence with bob@example.com in it.', 'hi'), null);
 });
+
+test("a replayed history shows the member's own choices in their language, typed text untouched", async () => {
+  const out = await translateConversationPayload({
+    history: [
+      { sender: 'user', id: 'a1', answer: 'Passport' },
+      { sender: 'user', id: 'a2', answer: 'Asha Rao' },
+    ],
+    messages: [],
+    input: null,
+  }, 'hi');
+
+  assert.equal(out.history[0].answer, 'पासपोर्ट');
+  assert.equal(out.history[1].answer, 'Asha Rao', 'a name is not a label and must stay as typed');
+});
