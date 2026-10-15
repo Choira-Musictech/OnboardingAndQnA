@@ -77,6 +77,10 @@ export const OCR_FIELD_LABELS = {
   PAN: { name: 'Name', pan: 'PAN Number', dob: 'Date of Birth', holderType: 'Holder Type' },
   AADHAAR: { name: 'Name', aadhaar: 'Aadhaar Number', dob: 'Date of Birth', gender: 'Gender', address: 'Address' },
   BANK: {
+    // Only present once the bank registry confirms the account - it arrives in
+    // fieldsFromRegistry, not off the cheque itself - so it simply does not appear
+    // on an unverified document. Listed first: it is the line a member checks.
+    accountHolder: 'Account Holder',
     bankName: 'Bank Name',
     accountNumber: 'Account Number',
     ifsc: 'IFSC Code',
