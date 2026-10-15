@@ -525,11 +525,26 @@ async function withExtractedDetails(transcript, userId) {
     } catch {
       continue;
     }
+    // DocumentName is the caption the row was filed under, which is not always the
+    // type OCR ran as: an address proof is stored as PERMANENT_ADDRESS_PROOF or
+    // COMM_ADDRESS_PROOF but read as ELECTRICITY, GST or a licence, and a company
+    // PAN is stored as COMPANY_PAN but read as PAN. OCR_FIELD_LABELS is keyed on the
+    // reader's types, so the caption found no labels and the card came back blank.
+    // The reader puts its own type in the result; that is what to look the labels up by.
+    const ocrType = extracted?.documentType ?? doc.DocumentName;
     // Only the two information bubbles - the "Is this correct?" prompt belongs to a
     // question the member already answered, and asking it again would be a lie.
-    const [intro, values] = buildOcrConfirmationMessages(doc.DocumentName, extracted);
-    if (values?.content?.richText?.length) {
+    const [intro, values] = buildOcrConfirmationMessages(ocrType, extracted);
+    // A type with no labels, or one whose every field came back empty, yields a bubble
+    // holding an empty string - which still has a richText node, so length alone never
+    // caught it. Check for actual text.
+    const hasValues = (values?.content?.richText ?? []).some((node) =>
+      (node?.children ?? []).some((child) => typeof child?.text === 'string' && child.text.trim()),
+    );
+    if (hasValues) {
       out.push({ sender: 'bot', ...intro }, { sender: 'bot', ...values });
+    } else {
+      logger.warn({ userId, caption: doc.DocumentName, ocrType }, 'No OCR labels for this document - card skipped');
     }
   }
   return out;
