@@ -142,6 +142,27 @@ function rebuildOcrFailures(payload, targetLanguage) {
   };
 }
 
+/**
+ * The member's own earlier answers, in the replayed history, back in their language.
+ *
+ * Answers are stored in the flow's wording - toSourceText maps a tapped label such as
+ * "हाँ" to "Yes" on the way in, so the engines match it - so a replay would show every
+ * choice they made in English. Only exact dictionary matches change: a name, an address
+ * or a work link is not a label, finds no entry, and is shown exactly as it was typed.
+ */
+function localizeReplayedAnswers(payload, targetLanguage) {
+  if (!Array.isArray(payload?.history)) return payload;
+
+  return {
+    ...payload,
+    history: payload.history.map((entry) => {
+      if (entry?.sender !== 'user' || typeof entry.answer !== 'string') return entry;
+      const translated = lookup(entry.answer, targetLanguage);
+      return translated ? { ...entry, answer: translated } : entry;
+    }),
+  };
+}
+
 export async function translateConversationPayload(payload, requestedLanguage) {
   const targetLanguage = resolveTargetLanguage(requestedLanguage);
   if (!targetLanguage || !payload) return payload;
@@ -149,6 +170,7 @@ export async function translateConversationPayload(payload, requestedLanguage) {
   // Before the generic pass, so the rebuilt sentence is not then looked up and
   // missed. A bubble this rewrites is already in the member's language.
   payload = rebuildOcrFailures(payload, targetLanguage);
+  payload = localizeReplayedAnswers(payload, targetLanguage);
 
   // Bubbles first, as whole messages: a sentence split across bold/link nodes is
   // only translatable - and only matches the dictionary - when it is joined back up.
