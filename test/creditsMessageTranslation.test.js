@@ -8,10 +8,11 @@
 // ==================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 
 process.env.TRANSLATION_ENABLED = 'true';
 process.env.TRANSLATION_PROVIDER = 'dictionary';
-process.env.TRANSLATION_DICTIONARY_PATH = new URL('../translations/flow-translations.json', import.meta.url).pathname;
+process.env.TRANSLATION_DICTIONARY_PATH = fileURLToPath(new URL('../translations/flow-translations.json', import.meta.url));
 process.env.TRANSLATION_SUPPORTED_LANGUAGES = 'en,hi,mr,gu,bn,ur,ta,kn,te,or';
 
 const { lookup } = await import('../src/modules/translation/dictionary.js');
