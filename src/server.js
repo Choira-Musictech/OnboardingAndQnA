@@ -5,6 +5,7 @@ import { app } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
 import { disconnectPrisma, pingDatabase } from './shared/prisma.js';
+import { applicationPdfService } from './modules/esign/services/applicationPdf.service.js';
 
 async function start() {
   try {
@@ -26,6 +27,7 @@ const server = await start();
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully...`);
   server.close(async () => {
+    await applicationPdfService.closeBrowser();
     await disconnectPrisma();
     logger.info('Server closed, process exiting.');
     process.exit(0);

@@ -16,6 +16,7 @@ import conversationRoutes from './modules/conversation/routes/conversation.route
 import healthRoutes from './modules/health/routes/health.routes.js';
 import spotifyRoutes from './modules/spotify/routes/spotify.routes.js';
 import paymentRoutes from './modules/payment/routes/payment.routes.js';
+import esignRoutes from './modules/esign/routes/esign.routes.js';
 
 export const app = express();
 
@@ -45,6 +46,7 @@ app.use('/registration', registrationRoutes);
 app.use('/conversation', conversationRoutes);
 app.use('/spotify', spotifyRoutes);
 app.use('/payment', paymentRoutes);
+app.use('/esign', esignRoutes);
 
 
 // --- 404 + central error handling (LAST) ---

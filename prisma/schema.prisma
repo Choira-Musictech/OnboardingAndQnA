@@ -521,3 +521,26 @@ model AppAccountsRegPayment {
   @@map("App_Accounts_RegPayment")
 }
 
+/// One row per attempt to e-sign a member's application form (see scripts/add-esign-table.sql).
+/// Provider: EMSIGNER (Indian members, Aadhaar eSign) or DOCUSIGN (NRI members). ProviderRefId is
+/// the emSigner WorkflowId / DocuSign EnvelopeId. Status: INITIATED, COMPLETED, FAILED.
+model AppAccountsESign {
+  ESignId         BigInt    @id(map: "PK_App_Accounts_ESign") @default(autoincrement())
+  AccountId       BigInt
+  Provider        String    @db.NVarChar(20)
+  ProviderRefId   String?   @db.NVarChar(100)
+  DocumentId      String?   @db.NVarChar(100)
+  Status          String    @db.NVarChar(20)
+  SigningUrl      String?   @db.NVarChar(2000)
+  UnsignedPdfPath String?   @db.NVarChar(500)
+  SignedPdfPath   String?   @db.NVarChar(500)
+  ResponseJson    String?   @db.NVarChar(Max)
+  CreateDate      DateTime  @default(now(), map: "DF_App_Accounts_ESign_CreateDate") @db.DateTime
+  ModifedDate     DateTime? @db.DateTime
+  CompletedDate   DateTime? @db.DateTime
+
+  @@unique([Provider, ProviderRefId], map: "UQ_App_Accounts_ESign_Provider_Ref")
+  @@index([AccountId], map: "IX_App_Accounts_ESign_AccountId")
+  @@map("App_Accounts_ESign")
+}
+
