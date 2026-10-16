@@ -23,6 +23,7 @@ export const sendMessage = async (req, res, next) => {
       // Sent in the member's language; the flow only knows its own wording.
       message: translationService.toSourceText(req.body.message, languageOf(req)),
       attachedFileUrls: req.body.attachedFileUrls,
+      relocalize: req.body.relocalize,
     });
     return ok(res, { data: await translationService.translateConversationPayload(data, languageOf(req)) });
   } catch (err) {

@@ -12,6 +12,7 @@ import { badRequestError } from '../../../shared/errors.js';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
 import { registrationService, OCR_TYPE_BY_DOC_TYPE } from '../../registration/services/registration.service.js';
+import { registrationRepository } from '../../registration/repositories/registration.repository.js';
 import { typebotClient, isDeadSessionError } from '../services/typebot/typebotClient.js';
 import { typebotSessionStore } from '../services/typebot/typebotSessionStore.js';
 import { resolveDocumentType } from '../services/typebot/documentTypeMap.js';
@@ -78,6 +79,10 @@ export const OCR_FIELD_LABELS = {
   PAN: { name: 'Name', pan: 'PAN Number', dob: 'Date of Birth', holderType: 'Holder Type' },
   AADHAAR: { name: 'Name', aadhaar: 'Aadhaar Number', dob: 'Date of Birth', gender: 'Gender', address: 'Address' },
   BANK: {
+    // Only present once the bank registry confirms the account - it arrives in
+    // fieldsFromRegistry, not off the cheque itself - so it simply does not appear
+    // on an unverified document. Listed first: it is the line a member checks.
+    accountHolder: 'Account Holder',
     bankName: 'Bank Name',
     accountNumber: 'Account Number',
     ifsc: 'IFSC Code',
@@ -482,6 +487,71 @@ async function offerResume(userId) {
 // Opens a fresh chat on the published flow and feeds the member's own answers back into it until it
 // is asking what it was asking when they left. See conversationJournal.service.js for why this is a
 // replay rather than a jump, and why it must not go back through handle().
+/**
+ * Put the "we extracted the following details" card back under each document the
+ * member uploaded.
+ *
+ * Replay runs the flow through Typebot, so the transcript carries Typebot's bubbles
+ * and the member's answers - but this card is built here, at upload time, and never
+ * reaches the journal. Rebuilt from App_Accounts_Doc.OcrExtract, matched to the turn
+ * by the uploaded URL, which is the one thing both sides hold.
+ *
+ * Best effort by design: a document saved before OcrExtract existed, one uploaded
+ * without OCR, or a row whose JSON will not parse simply contributes no card. The
+ * resumed chat is still correct without it, and a resume must not fail over a
+ * cosmetic bubble.
+ */
+async function withExtractedDetails(transcript, userId) {
+  if (!Array.isArray(transcript) || !transcript.length) return transcript;
+  const hasUpload = transcript.some((e) => e?.sender === 'user' && e.attachedFileUrls?.length);
+  if (!hasUpload) return transcript;
+
+  let byUrl = new Map();
+  try {
+    const docs = await registrationRepository.findDocumentsByAccountId(userId);
+    byUrl = new Map(docs.filter((d) => d.DocumentCaption).map((d) => [d.DocumentCaption, d]));
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read documents while rebuilding the resumed transcript');
+    return transcript;
+  }
+
+  const out = [];
+  for (const entry of transcript) {
+    out.push(entry);
+    const url = entry?.sender === 'user' ? entry.attachedFileUrls?.[0] : null;
+    const doc = url ? byUrl.get(url) : null;
+    if (!doc?.OcrExtract) continue;
+    let extracted;
+    try {
+      extracted = JSON.parse(doc.OcrExtract);
+    } catch {
+      continue;
+    }
+    // DocumentName is the caption the row was filed under, which is not always the
+    // type OCR ran as: an address proof is stored as PERMANENT_ADDRESS_PROOF or
+    // COMM_ADDRESS_PROOF but read as ELECTRICITY, GST or a licence, and a company
+    // PAN is stored as COMPANY_PAN but read as PAN. OCR_FIELD_LABELS is keyed on the
+    // reader's types, so the caption found no labels and the card came back blank.
+    // The reader puts its own type in the result; that is what to look the labels up by.
+    const ocrType = extracted?.documentType ?? doc.DocumentName;
+    // Only the two information bubbles - the "Is this correct?" prompt belongs to a
+    // question the member already answered, and asking it again would be a lie.
+    const [intro, values] = buildOcrConfirmationMessages(ocrType, extracted);
+    // A type with no labels, or one whose every field came back empty, yields a bubble
+    // holding an empty string - which still has a richText node, so length alone never
+    // caught it. Check for actual text.
+    const hasValues = (values?.content?.richText ?? []).some((node) =>
+      (node?.children ?? []).some((child) => typeof child?.text === 'string' && child.text.trim()),
+    );
+    if (hasValues) {
+      out.push({ sender: 'bot', ...intro }, { sender: 'bot', ...values });
+    } else {
+      logger.warn({ userId, caption: doc.DocumentName, ocrType }, 'No OCR labels for this document - card skipped');
+    }
+  }
+  return out;
+}
+
 async function resumeFromJournal({ userId, token }) {
   const turns = await conversationJournalService.loadJournal(userId);
   const startResponse = await typebotClient.startChat({
@@ -552,14 +622,14 @@ async function resumeFromJournal({ userId, token }) {
       userId,
       messages: resumedMessages,
       input: response.input,
-      extra: { history: transcript },
+      extra: { history: await withExtractedDetails(transcript, userId) },
     });
     if (withReview) return withReview;
   }
 
   return {
     sessionEnded: false,
-    history: transcript,
+    history: await withExtractedDetails(transcript, userId),
     messages: resumedMessages,
     input: response.input,
     progress: resolveProgress(response.input.id),
@@ -594,8 +664,29 @@ async function withPaymentReview({ userId, messages, input, extra = {} }) {
   }
 }
 
+// Re-serves the step the member is on after a language switch. The controller translates whatever
+// comes back, so replaying the journal is enough: it redraws the conversation so far and lands on
+// the live question, in the new language, without the "continue or start over" choice. Null when
+// nothing is journalled yet - the caller then starts a normal chat, which is the first question and
+// needs no resume decision either.
+async function relocalizeCurrentStep({ userId, token, existing }) {
+  // Still looking at the offer itself: show it again rather than answering it on their behalf.
+  if (existing?.pendingResumeChoice) return offerResume(userId);
+
+  let turns = 0;
+  try {
+    turns = await conversationJournalService.countTurns(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read the journal to re-serve the step - starting a normal chat');
+    return null;
+  }
+  if (turns === 0) return null;
+
+  return resumeFromJournal({ userId, token });
+}
+
 /**
- * @param {{ userId: string, token: string, message?: string, attachedFileUrls?: string[] }} input
+ * @param {{ userId: string, token: string, message?: string, attachedFileUrls?: string[], relocalize?: boolean }} input
  */
 export async function handle(args) {
   const result = await handleCore(args);
@@ -616,7 +707,7 @@ async function withStepFlags(userId, result) {
   return { ...result, isPaymentStep: paymentStep, signRequired };
 }
 
-async function handleCore({ userId, token, message, attachedFileUrls }) {
+async function handleCore({ userId, token, message, attachedFileUrls, relocalize }) {
   // A blank message is not an answer to anything - Typebot rejects empty text on every input type,
   // and the validator lets `message: ""` through, so a client that always sends the field (Apidog,
   // a form that posts an empty box) would otherwise be treated as if it had said something. Every
@@ -626,6 +717,15 @@ async function handleCore({ userId, token, message, attachedFileUrls }) {
   if (typeof message === 'string' && !message.trim()) message = undefined;
 
   let existing = typebotSessionStore.get(userId);
+
+  // The member just switched language. The empty call that follows is not a fresh start, so it must
+  // not hit the stale-session discard or the resume offer below - they asked to read the same
+  // question in another language, not to choose between continuing and starting over.
+  if (relocalize && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
+    const sameStep = await relocalizeCurrentStep({ userId, token, existing });
+    if (sameStep) return sameStep;
+  }
+
   let bypassEmailGate = false;
   let bypassWorkLinkSave = false;
   // Something to tell the member about their work link while the conversation moves past the step -

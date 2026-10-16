@@ -55,7 +55,7 @@ function update(accountId, data) {
 // DocStatus is deliberately no longer written here - OcrStatus (see saveDocument()) is the single
 // source of truth for whether/how OCR went; DocStatus is left alone (stays whatever it already
 // was - null on a brand-new row) rather than being retired from the schema outright.
-async function upsertDocument({ accountId, caption, documentUrl, ocrStatus = 1, docFileName = null, documentLookupId = null, createdBy = null }) {
+async function upsertDocument({ accountId, caption, documentUrl, ocrStatus = 1, ocrExtract = null, docFileName = null, documentLookupId = null, createdBy = null }) {
   const existing = await prisma.appAccountsDoc.findFirst({
     where: { AccountId: BigInt(accountId), DocumentName: caption },
   });
@@ -71,6 +71,9 @@ async function upsertDocument({ accountId, caption, documentUrl, ocrStatus = 1, 
       data: {
         DocumentCaption: documentUrl,
         OcrStatus: ocrStatus,
+        // Overwritten on every save, like DocumentCaption above: a re-upload must not
+        // leave the previous document's extraction attached to the new file.
+        OcrExtract: ocrExtract,
         DocFileName: docFileName,
         DocumentLookupId: documentLookupIdValue,
         ModifedDate: new Date(),
@@ -85,6 +88,7 @@ async function upsertDocument({ accountId, caption, documentUrl, ocrStatus = 1, 
       DocumentName: caption,
       DocumentCaption: documentUrl,
       OcrStatus: ocrStatus,
+      OcrExtract: ocrExtract,
       DocFileName: docFileName,
       DocumentLookupId: documentLookupIdValue,
       ...(createdBy ? { CreatedBy: createdBy, ModifedBy: createdBy } : {}),

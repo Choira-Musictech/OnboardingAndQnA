@@ -77,6 +77,10 @@ export function dictionarySize() {
 // Only emails and URLs are treated as variable: a bare number would wreck
 // wording like "4-digit", and there is nothing to gain from replacing it.
 const VARIABLE_PARTS = [
+  // "You're not listed in this song's credits: <every name the platform reported>." - the list
+  // is the song's own data, can hold commas and apostrophes, and ends at the full stop that
+  // closes the sentence (end of line or end of text).
+  /(?<=song's credits: )[^\n]+?(?=\.(?:\n|$))/g,
   // The domain is matched label by label so the regex cannot swallow the full
   // stop that ends the sentence - "...@gmail.com." must template to "{0}.", not "{0}".
   /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,

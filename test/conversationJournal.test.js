@@ -482,6 +482,37 @@ test('"Start over" is ignored for a signed member - the journal is kept and they
   assert.equal(await conversationJournalService.countTurns(userId), 1, 'journal untouched');
 });
 
+test('a language switch re-serves the current step instead of offering to resume', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  for (const blockId of ['b1', 'b2']) {
+    await conversationJournalService.recordTurn({ userId, blockId, answer: `answer-${blockId}` });
+  }
+
+  const restoreClient = stubReplay(['b1', 'b2', 'b3']);
+  t.after(restoreClient);
+
+  // A plain empty call is how a returning member is greeted: the choice comes first.
+  const offer = await handle({ userId, token: 't' });
+  assert.equal(offer.input?.id, 'resume-registration');
+
+  // The same empty call after a language switch goes straight to the question they were on.
+  const switched = await handle({ userId, token: 't', relocalize: true });
+  assert.equal(switched.input?.id, 'b3');
+  assert.notEqual(switched.input?.id, 'resume-registration');
+});
+
+test('a language switch with nothing journalled starts a normal chat, not a resume offer', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+
+  const restoreClient = stubReplay(['b1', 'b2']);
+  t.after(restoreClient);
+
+  const first = await handle({ userId, token: 't', relocalize: true });
+  assert.equal(first.input?.id, 'b1');
+});
+
 test('"Start over" clears previously saved work links, not just the journal', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');
   const userId = await makeAccount();

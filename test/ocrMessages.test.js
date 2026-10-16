@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { composeOcrMessage, ocrMessageCatalogue } from '../src/modules/translation/ocrMessages.js';
 
-const LANGUAGES = ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn'];
+const LANGUAGES = ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn', 'te', 'or'];
 
 test('a refusal is answered in each supported language', () => {
   const ocr = { code: 'DOCUMENT_NOT_REGISTERED', expectedDocument: 'PAN' };

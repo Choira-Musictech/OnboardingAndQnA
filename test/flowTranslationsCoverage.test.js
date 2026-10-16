@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const LANGUAGES = ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn'];
+const LANGUAGES = ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn', 'te', 'or'];
 const dictionary = JSON.parse(readFileSync(new URL('../translations/flow-translations.json', import.meta.url), 'utf8'));
 // Distinct slots: a translation may legitimately say {expected} once where English says it twice.
 const slots = (text) => [...new Set([...text.matchAll(/\{[^}]+\}/g)].map((m) => m[0]))].sort();

@@ -16,7 +16,7 @@ writeFileSync(dictPath, JSON.stringify({
   'Please upload your PAN Card.': { hi: 'कृपया अपना PAN कार्ड अपलोड करें।', mr: 'कृपया तुमचे PAN कार्ड अपलोड करा.', gu: 'કૃપા કરીને તમારું PAN કાર્ડ અપલોડ કરો.' },
   'Upload Address Proof\nPlease upload any one of the following documents as proof of your permanent address:':
     { hi: 'पते का प्रमाण अपलोड करें\nकृपया स्थायी पते का कोई एक दस्तावेज़ अपलोड करें:', mr: 'x', gu: 'y' },
-  Passport: { hi: 'पासपोर्ट', mr: 'पासपोर्ट', gu: 'પાસપોર્ટ' },
+  Passport: { hi: 'पासपोर्ट', mr: 'पासपोर्ट', gu: 'પાસપોર્ટ', te: 'పాస్‌పోర్ట్', or: 'ପାସପୋର୍ଟ' },
   "We've sent a 4-digit OTP to {0}. Enter it to verify.": {
     hi: 'हमने {0} पर 4 अंकों का OTP भेजा है। सत्यापित करने के लिए इसे दर्ज करें।', mr: 'x', gu: 'y' },
 }), 'utf8');
@@ -24,7 +24,7 @@ writeFileSync(dictPath, JSON.stringify({
 process.env.TRANSLATION_ENABLED = 'true';
 process.env.TRANSLATION_PROVIDER = 'dictionary';
 process.env.TRANSLATION_DICTIONARY_PATH = dictPath;
-process.env.TRANSLATION_SUPPORTED_LANGUAGES = 'en,hi,mr,gu';
+process.env.TRANSLATION_SUPPORTED_LANGUAGES = 'en,hi,mr,gu,te,or';
 
 const { lookup, dictionarySize } = await import('../src/modules/translation/dictionary.js');
 const { messageText, rebuildMessage } = await import('../src/modules/translation/messageBlocks.js');
@@ -34,6 +34,8 @@ test('the dictionary is loaded and answers per language', () => {
   assert.equal(dictionarySize(), 4);
   assert.equal(lookup('Passport', 'gu'), 'પાસપોર્ટ');
   assert.equal(lookup('Passport', 'hi'), 'पासपोर्ट');
+  assert.equal(lookup('Passport', 'te'), 'పాస్‌పోర్ట్');
+  assert.equal(lookup('Passport', 'or'), 'ପାସପୋର୍ଟ');
   assert.equal(lookup('not in the flow', 'hi'), null, 'an unknown phrase stays English rather than being guessed');
 });
 
@@ -92,7 +94,12 @@ test('a button tapped in another language reaches the flow as English', async ()
   // "Invalid message. Please, try again." - the flow only knows its own wording.
   const payload = { messages: [], input: { id: 'i1', type: 'choice input', items: [{ id: 'c1', content: 'Passport' }] } };
 
-  for (const [language, expected] of [['hi', 'पासपोर्ट'], ['gu', 'પાસપોર્ટ']]) {
+  for (const [language, expected] of [
+    ['hi', 'पासपोर्ट'],
+    ['gu', 'પાસપોર્ટ'],
+    ['te', 'పాస్‌పోర్ట్'],
+    ['or', 'ପାସପୋର୍ଟ'],
+  ]) {
     const shown = (await translateConversationPayload(structuredClone(payload), language)).input.items[0].content;
     assert.equal(shown, expected, 'the member sees their own language');
     assert.equal(toSourceText(shown, language), 'Passport', 'the flow receives its own English');
@@ -122,4 +129,18 @@ test('a message carrying a live value matches one stored entry', () => {
   // The address must not swallow the full stop that ends the sentence.
   assert.match(forNirnay, /gmail\.com पर/, 'the sentence after the address is kept');
   assert.equal(lookup('Totally unknown sentence with bob@example.com in it.', 'hi'), null);
+});
+
+test("a replayed history shows the member's own choices in their language, typed text untouched", async () => {
+  const out = await translateConversationPayload({
+    history: [
+      { sender: 'user', id: 'a1', answer: 'Passport' },
+      { sender: 'user', id: 'a2', answer: 'Asha Rao' },
+    ],
+    messages: [],
+    input: null,
+  }, 'hi');
+
+  assert.equal(out.history[0].answer, 'पासपोर्ट');
+  assert.equal(out.history[1].answer, 'Asha Rao', 'a name is not a label and must stay as typed');
 });
