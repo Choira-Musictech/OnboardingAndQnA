@@ -21,6 +21,7 @@ import { registrationService } from '../../registration/services/registration.se
 import { conversationJournalService } from '../../conversation/services/conversationJournal.service.js';
 import { typebotSessionStore } from '../../conversation/services/typebot/typebotSessionStore.js';
 import { paymentRepository } from '../repositories/payment.repository.js';
+import { esignService } from '../../esign/services/esign.service.js';
 import { formatAmount, generatePayuHash, verifyPayuHash } from './payu/payu.utils.js';
 import { payuClient } from './payu/payu.client.js';
 import { resolveFee } from './payu/feeSchedule.js';
@@ -177,6 +178,12 @@ async function initiatePayment({ userId, productInfo, returnOrigin }) {
     throw conflictError('This registration has already been paid for', {
       errorCode: 'PAYMENT_ALREADY_COMPLETED',
     });
+  }
+
+  // Review -> sign -> payment. The chat hides the payment button until the application is signed
+  // (esignGate.js); this is the same rule enforced where the money actually starts moving.
+  if (esignService.isRequiredFor(account) && !(await esignService.isSigned(userId))) {
+    throw forbiddenError('Please sign your application before payment', { errorCode: 'ESIGN_REQUIRED' });
   }
 
   const txnId = generateTxnId(userId);

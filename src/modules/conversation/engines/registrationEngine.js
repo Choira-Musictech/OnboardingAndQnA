@@ -46,6 +46,8 @@ import {
   describePaymentPending,
   describePaymentReceived,
 } from '../services/typebot/paymentGate.js';
+import { describeSignDone, describeSignPending, describeSignRequired, isApplicationSigned, needsSignature } from '../services/typebot/esignGate.js';
+import { esignService } from '../../esign/services/esign.service.js';
 import { paymentService } from '../../payment/services/payment.service.js';
 import { registrationReviewService } from '../../registration/services/registrationReview.service.js';
 import { documentStorageService } from '../../registration/services/documentStorage.service.js';
@@ -609,16 +611,57 @@ async function resumeFromJournal({ userId, token }) {
   // A clean replay needs no explanation: the member sees their own conversation redrawn from the
   // top (`history`) with the next question under it, exactly as if they had never left. Only a
   // partial restore says anything, because the questions really did change under them.
+  const resumedMessages = [
+    ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
+    ...(response.messages ?? []),
+  ];
+
+  // Resumed onto the payment step: the review and the signing/payment notices belong here too.
+  if (isPaymentStep(response.input.id)) {
+    const withReview = await withPaymentReview({
+      userId,
+      messages: resumedMessages,
+      input: response.input,
+      extra: { history: await withExtractedDetails(transcript, userId) },
+    });
+    if (withReview) return withReview;
+  }
+
   return {
     sessionEnded: false,
     history: await withExtractedDetails(transcript, userId),
-    messages: [
-      ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
-      ...(response.messages ?? []),
-    ],
+    messages: resumedMessages,
     input: response.input,
     progress: resolveProgress(response.input.id),
   };
+}
+
+// The payment step's reply: Typebot's own messages, then everything on file, then - review -> sign
+// -> payment - either the signing request (not signed yet, see esignGate.js) or a note that the
+// signature went through. Shared by the live relay and the resume path, which both can land here.
+// Returns null when the review can't be built, so the caller shows the button as before.
+async function withPaymentReview({ userId, messages, input, extra = {} }) {
+  try {
+    const sections = await registrationReviewService.buildReview(userId);
+    let signNotice = [];
+    if (await needsSignature(userId)) {
+      signNotice = [textMessage('esign-required', describeSignRequired())];
+    } else if (await esignService.isRequired(userId).catch(() => false)) {
+      signNotice = [textMessage('esign-done', describeSignDone())];
+    }
+
+    return {
+      sessionEnded: false,
+      ...extra,
+      messages: [...messages, textMessage('payment-review', describeReview(sections)), ...signNotice],
+      input,
+      progress: resolveProgress(input.id),
+    };
+  } catch (err) {
+    // Never block payment because the summary couldn't be built - fall back to the button.
+    logger.warn({ userId, err }, 'Could not build the pre-payment review, showing payment directly');
+    return null;
+  }
 }
 
 // Re-serves the step the member is on after a language switch. The controller translates whatever
@@ -653,7 +696,15 @@ export async function handle(args) {
   // silently on republish (same fragility paymentGate.js's own PAYMENT_BLOCK_IDS comment warns
   // about) - one central place computes it here instead of at every return statement below,
   // including the ones inside resumeFromJournal() that this wraps too.
-  return { ...result, isPaymentStep: isPaymentStep(result.input?.id) };
+  return withStepFlags(args.userId, result);
+}
+
+// isPaymentStep, plus signRequired: on the payment step, the application still has to be e-signed
+// first (esignGate.js) - the frontend shows the sign card instead of the payment button.
+async function withStepFlags(userId, result) {
+  const paymentStep = isPaymentStep(result.input?.id);
+  const signRequired = paymentStep ? await needsSignature(userId) : false;
+  return { ...result, isPaymentStep: paymentStep, signRequired };
 }
 
 async function handleCore({ userId, token, message, attachedFileUrls, relocalize }) {
@@ -700,7 +751,8 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     // Only an explicit "start over" throws the progress away. Anything else - a stray tap, a typo,
     // a frontend that echoes something unexpected - resumes, because the destructive branch is the
     // one that must never be reached by accident.
-    if (!choosesRestart(message)) {
+    // A member who has signed is never restarted either: their details are confirmed.
+    if (!choosesRestart(message) || (await isApplicationSigned(userId))) {
       return resumeFromJournal({ userId, token });
     }
 
@@ -729,7 +781,12 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // burn a Typebot session we'd immediately throw away.
   if (!existing && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
     const offer = await offerResume(userId);
-    if (offer) return offer;
+    if (offer) {
+      // Signed = confirmed: no "start over" for them, carry straight on (resumeFromJournal replaces
+      // the pending-choice session offerResume just stored).
+      if (await isApplicationSigned(userId)) return resumeFromJournal({ userId, token });
+      return offer;
+    }
   }
 
   // Resolve a pending OCR-confirmation before doing anything else - the
@@ -936,10 +993,13 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // all for a member who had paid nothing. Hold them on the button instead.
   if (existing?.input && isPaymentStep(existing.input.id) && message !== undefined) {
     const paid = await paymentService.hasSuccessfulPayment(userId);
+    const unsigned = !paid && (await needsSignature(userId));
     return {
       sessionEnded: false,
       messages: [
-        textMessage('payment-pending', paid ? describePaymentReceived(userId) : describePaymentPending()),
+        unsigned
+          ? textMessage('esign-pending', describeSignPending())
+          : textMessage('payment-pending', paid ? describePaymentReceived(userId) : describePaymentPending()),
       ],
       input: existing.input,
       progress: resolveProgress(existing.input.id),
@@ -1488,19 +1548,8 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // Typebot's own messages are kept above the review, so nothing the flow said is lost. There is no
   // separate confirmation step: the review is informational, the button is always right there.
   if (!ended && isPaymentStep(response.input?.id)) {
-    try {
-      const sections = await registrationReviewService.buildReview(userId);
-
-      return {
-        sessionEnded: false,
-        messages: [...messages, textMessage('payment-review', describeReview(sections))],
-        input: response.input,
-        progress: resolveProgress(response.input.id),
-      };
-    } catch (err) {
-      // Never block payment because the summary couldn't be built - fall through to the button.
-      logger.warn({ userId, err }, 'Could not build the pre-payment review, showing payment directly');
-    }
+    const withReview = await withPaymentReview({ userId, messages, input: response.input });
+    if (withReview) return withReview;
   }
 
   return {
@@ -1524,7 +1573,7 @@ export async function handleUpload(args) {
   // Same stable contract as handle() - see its comment. A file upload never itself lands on the
   // payment button, but keeping the field present on every response (rather than only from
   // handle()) means the frontend never has to special-case which endpoint it called.
-  return { ...result, isPaymentStep: isPaymentStep(result.input?.id) };
+  return withStepFlags(args.userId, result);
 }
 
 async function handleUploadCore({ userId, token, file }) {

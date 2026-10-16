@@ -186,6 +186,28 @@ const envSchema = z.object({
   PAYU_RETURN_ORIGINS: z.string().optional().default(''),
   PAYU_FAILURE_URL: z.string().optional(),
   PAYU_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+
+  /* E-sign of the application form, between the pre-payment review and payment */
+  // Off by default: with it off the chat goes from review straight to payment, as before.
+  // Same string shape as OCR_ENABLED - z.coerce.boolean() would treat "false" as true.
+  ESIGN_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  // eMudhra / emSigner (Aadhaar eSign) for Indian members (AccountRegType I / C).
+  EMSIGNER_BASE_URL: z.string().default('https://demoapi-core.emsigner.com'),
+  EMSIGNER_APP_NAME: z.string().optional(),
+  EMSIGNER_SECRET_KEY: z.string().optional(),
+  EMSIGNER_ENVIRONMENT: z.string().default('Development'),
+  // The IPRS account that starts each signing request (emSigner's "EmailId").
+  EMSIGNER_INITIATOR_EMAIL: z.string().optional(),
+  // Public URL of GET /esign/emsigner/return - emSigner sends the member's browser there.
+  EMSIGNER_RETURN_URL: z.string().optional(),
+  EMSIGNER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  // Frontend page the member lands on after signing (?status=...).
+  ESIGN_RESULT_URL: z.string().default('http://localhost:5173/esign/result'),
+  // Where unsigned and signed PDFs are kept (relative to the backend folder).
+  ESIGN_STORAGE_DIR: z.string().default('uploads/esign'),
 });
 
 const parsed = envSchema.safeParse(process.env);

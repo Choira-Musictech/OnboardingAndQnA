@@ -9,10 +9,15 @@ import {
 } from '../src/modules/payment/services/payu/payu.utils.js';
 import { resolveFee, FEES_BY_REG_TYPE } from '../src/modules/payment/services/payu/feeSchedule.js';
 import { registrationEmailService } from '../src/modules/registration/services/registrationEmail.service.js';
+import { esignService } from '../src/modules/esign/services/esign.service.js';
 
 // The DB-backed tests below complete real registrations, and complete() emails IPRS and the member
 // on the first transition - a test run must never send real mail.
 registrationEmailService.sendCompletionEmails = async () => {};
+
+// These tests are about payment itself, so they must not depend on whether the local .env turns
+// e-signing on; the sign-before-payment rule has its own tests in esign.test.js.
+esignService.isRequiredFor = () => false;
 
 async function makeAccount({ regType, email, name = 'PayU Tester' } = {}) {
   const { prisma } = await import('../src/shared/prisma.js');

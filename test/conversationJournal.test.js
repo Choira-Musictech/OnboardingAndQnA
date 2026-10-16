@@ -28,6 +28,10 @@ import { handle } from '../src/modules/conversation/engines/registrationEngine.j
 import { typebotSessionStore } from '../src/modules/conversation/services/typebot/typebotSessionStore.js';
 import { registrationReviewService } from '../src/modules/registration/services/registrationReview.service.js';
 import { workLinkService } from '../src/modules/work/services/workLink.service.js';
+import { esignService } from '../src/modules/esign/services/esign.service.js';
+import { PAYMENT_BLOCK_IDS } from '../src/modules/conversation/services/typebot/paymentBlockIds.js';
+
+const PAYMENT_BLOCK = [...PAYMENT_BLOCK_IDS][0];
 
 // --- replay (pure, typebotClient stubbed) ----------------------------------
 
@@ -405,6 +409,77 @@ test('resuming hands back the replayed chat as history and no longer shows a sum
     ['answer-b1', 'answer-b2'],
   );
   assert.equal(/Here's what you told us earlier|Picking up where you left off/.test(texts(resumed)), false);
+});
+
+// Resuming onto the payment step must show the same review + signing notices the live relay does.
+for (const { signed, expectNotice, expectSignRequired } of [
+  { signed: false, expectNotice: /Please sign your application before payment/, expectSignRequired: true },
+  { signed: true, expectNotice: /Your application is signed/, expectSignRequired: false },
+]) {
+  test(`resuming onto the payment step shows the review and ${signed ? 'the signed note' : 'the signing request'}`, async (t) => {
+    if (!dbAvailable) return t.skip('SQL Server is not reachable');
+    const userId = await makeAccount();
+    await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+
+    const realRequired = esignService.isRequired;
+    const realSigned = esignService.isSigned;
+    esignService.isRequired = async () => true;
+    esignService.isSigned = async () => signed;
+    const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
+    t.after(() => {
+      restoreClient();
+      esignService.isRequired = realRequired;
+      esignService.isSigned = realSigned;
+    });
+
+    // A signed member is resumed straight away; an unsigned one answers the continue prompt.
+    const first = await handle({ userId, token: 't' });
+    const resumed = signed ? first : await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+    assert.equal(resumed.isPaymentStep, true);
+    assert.equal(resumed.signRequired, expectSignRequired);
+    assert.match(texts(resumed), expectNotice);
+    assert.ok(resumed.messages.some((m) => m.id === 'payment-review'), 'the review is shown');
+  });
+}
+
+// A member who has signed is never offered "Start over".
+test('a signed member resumes straight away on an empty start call, with no continue/start-over prompt', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+
+  const realSigned = esignService.isSigned;
+  esignService.isSigned = async () => true;
+  const restoreClient = stubReplay(['b1', 'b2']);
+  t.after(() => {
+    restoreClient();
+    esignService.isSigned = realSigned;
+  });
+
+  const res = await handle({ userId, token: 't' });
+  assert.equal(res.input?.id, 'b2', 'went straight to where they were');
+  assert.notEqual(res.input?.id, 'resume-registration');
+});
+
+test('"Start over" is ignored for a signed member - the journal is kept and they resume', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+
+  // Offered while unsigned (e.g. a prompt left open in another tab), answered after signing.
+  const restoreClient = stubReplay(['b1', 'b2']);
+  await handle({ userId, token: 't' });
+  const realSigned = esignService.isSigned;
+  esignService.isSigned = async () => true;
+  t.after(() => {
+    restoreClient();
+    esignService.isSigned = realSigned;
+  });
+
+  const res = await handle({ userId, token: 't', message: 'Start over' });
+  assert.equal(res.input?.id, 'b2');
+  assert.equal(await conversationJournalService.countTurns(userId), 1, 'journal untouched');
 });
 
 test('a language switch re-serves the current step instead of offering to resume', async (t) => {
