@@ -328,7 +328,12 @@ const texts = (res) =>
 function stubReplay(blockIds) {
   const real = { start: typebotClient.startChat, cont: typebotClient.continueChat };
   let position = 0;
-  typebotClient.startChat = async () => ({ sessionId: 'resume-session', messages: [], input: { id: blockIds[0] } });
+  typebotClient.startChat = async () => {
+    // A real startChat opens a new session at the first block; the replay counter has to
+    // restart with it, or a second resume in the same test walks off the end of the flow.
+    position = 0;
+    return { sessionId: 'resume-session', messages: [], input: { id: blockIds[0] } };
+  };
   typebotClient.continueChat = async () => {
     position += 1;
     const next = blockIds[position];
@@ -550,10 +555,36 @@ test('a language switch re-serves the current step instead of offering to resume
   const offer = await handle({ userId, token: 't' });
   assert.equal(offer.input?.id, 'resume-registration');
 
-  // The same empty call after a language switch goes straight to the question they were on.
+  // Taking the offer puts them back on the question they left off at.
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+  assert.equal(resumed.input?.id, 'b3');
+
+  // Switching language from there re-serves that same question - it must not greet a member
+  // who is already mid-flow with the resume choice all over again.
   const switched = await handle({ userId, token: 't', relocalize: true });
   assert.equal(switched.input?.id, 'b3');
   assert.notEqual(switched.input?.id, 'resume-registration');
+});
+
+// The other half of the same rule, and the reason the step above is not simply skipped: a member
+// still looking at "continue or start over" has not chosen yet, so a language switch shows them
+// that choice again in the new language rather than answering it on their behalf.
+test('a language switch while the resume offer is open shows the offer again', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  for (const blockId of ['b1', 'b2']) {
+    await conversationJournalService.recordTurn({ userId, blockId, answer: `answer-${blockId}` });
+  }
+
+  const restoreClient = stubReplay(['b1', 'b2', 'b3']);
+  t.after(restoreClient);
+
+  const offer = await handle({ userId, token: 't' });
+  assert.equal(offer.input?.id, 'resume-registration');
+
+  const switched = await handle({ userId, token: 't', relocalize: true });
+  assert.equal(switched.input?.id, 'resume-registration', 'the choice is still theirs to make');
+  assert.equal(await conversationJournalService.countTurns(userId), 2, 'journal untouched');
 });
 
 test('a language switch with nothing journalled starts a normal chat, not a resume offer', async (t) => {
