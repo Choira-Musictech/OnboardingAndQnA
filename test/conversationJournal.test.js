@@ -27,6 +27,7 @@ import { conversationJournalRepository } from '../src/modules/conversation/repos
 import { handle } from '../src/modules/conversation/engines/registrationEngine.js';
 import { typebotSessionStore } from '../src/modules/conversation/services/typebot/typebotSessionStore.js';
 import { registrationReviewService } from '../src/modules/registration/services/registrationReview.service.js';
+import { registrationRepository } from '../src/modules/registration/repositories/registration.repository.js';
 import { workLinkService } from '../src/modules/work/services/workLink.service.js';
 import { esignService } from '../src/modules/esign/services/esign.service.js';
 import { PAYMENT_BLOCK_IDS } from '../src/modules/conversation/services/typebot/paymentBlockIds.js';
@@ -409,6 +410,59 @@ test('resuming hands back the replayed chat as history and no longer shows a sum
     ['answer-b1', 'answer-b2'],
   );
   assert.equal(/Here's what you told us earlier|Picking up where you left off/.test(texts(resumed)), false);
+});
+
+// A document OCR turned away used to leave no trace: no row was written and no turn was
+// journalled, so the member came back to the same upload question with no sign of the earlier
+// attempt and no reason for it. The rejection is recorded now - this is what they see of it.
+test('a resumed chat replays why a document was rejected', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  const documentUrl = 'https://s3.us-east-1.amazonaws.com/product008/public/pan.jpg';
+  await conversationJournalService.recordTurn({
+    userId,
+    blockId: 'b1',
+    answer: 'pan.jpg',
+    attachedFileUrls: [documentUrl],
+  });
+
+  const realDocs = registrationRepository.findDocumentsByAccountId;
+  registrationRepository.findDocumentsByAccountId = async () => [
+    {
+      AccountDocId: 1n,
+      DocumentName: 'PAN',
+      DocumentCaption: documentUrl,
+      OcrExtract: JSON.stringify({
+        ocrFailed: true,
+        documentType: 'PAN',
+        failureReason: 'This looks like a cancelled cheque, not a PAN card. Please upload your PAN card.',
+        ocrFailure: { code: 'WRONG_DOCUMENT', expectedDocument: 'PAN', detectedDocument: 'BANK' },
+      }),
+    },
+  ];
+  t.after(() => {
+    registrationRepository.findDocumentsByAccountId = realDocs;
+  });
+
+  const restoreClient = stubReplay(['b1', 'b2']);
+  t.after(restoreClient);
+
+  await handle({ userId, token: 't' });
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+  const rejection = (resumed.history ?? []).find((entry) => entry.id === 'ocr-extraction-failed');
+  assert.ok(rejection, 'the rejection is part of the replayed history');
+  assert.match(
+    (rejection.content?.richText ?? []).flatMap((node) => node.children ?? []).map((child) => child.text).join(''),
+    /cancelled cheque/,
+  );
+  // Rides along so the translator rebuilds the sentence in the member's language, as it does live.
+  assert.equal(rejection.ocrFailure?.code, 'WRONG_DOCUMENT');
+
+  // The document itself is read back through this API, not from the bucket it was uploaded to:
+  // that bucket sends no CORS headers, so pdf.js cannot read a resumed document.
+  const upload = (resumed.history ?? []).find((entry) => entry.sender === 'user' && entry.attachedFileUrls?.length);
+  assert.match(upload.attachedFileUrls[0], /\/documents\/1\/pan\.jpg\?e=\d+&t=/);
 });
 
 // Resuming onto the payment step must show the same review + signing notices the live relay does.

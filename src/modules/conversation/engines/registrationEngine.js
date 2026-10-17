@@ -13,6 +13,7 @@ import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
 import { registrationService, OCR_TYPE_BY_DOC_TYPE } from '../../registration/services/registration.service.js';
 import { registrationRepository } from '../../registration/repositories/registration.repository.js';
+import { buildDocumentUrl } from '../../documents/services/documentLink.service.js';
 import { typebotClient, isDeadSessionError } from '../services/typebot/typebotClient.js';
 import { typebotSessionStore } from '../services/typebot/typebotSessionStore.js';
 import { resolveDocumentType } from '../services/typebot/documentTypeMap.js';
@@ -205,6 +206,17 @@ const SAME_AS_ADDRESS_BLOCK_IDS = new Set([
   'ctpx2z89l8pqltt5ehahmq3a',
   'cbmqojadjfm2jmbk9c17a59q',
 ]);
+
+// The same bubble the member saw when the document was rejected, rebuilt from the row.
+// Mirrors the live wording in handleDocumentUpload - one of them changing alone would mean a
+// resumed chat quietly disagreeing with what the member was told at the time.
+function buildOcrFailureMessage(failure) {
+  const label = failure?.documentType ?? 'document';
+  const text = failure?.failureReason
+    ? `We couldn't verify this ${label} document:\n${failure.failureReason}`
+    : `We couldn't read this ${label} document clearly. Please upload a clearer, better-quality image.`;
+  return textMessage('ocr-extraction-failed', text, failure?.ocrFailure ? { ocrFailure: failure.ocrFailure } : undefined);
+}
 
 function textMessage(id, text, extra) {
   return {
@@ -517,14 +529,26 @@ async function withExtractedDetails(transcript, userId) {
 
   const out = [];
   for (const entry of transcript) {
-    out.push(entry);
     const url = entry?.sender === 'user' ? entry.attachedFileUrls?.[0] : null;
     const doc = url ? byUrl.get(url) : null;
+    // Point the card at this API rather than at the bucket the document was
+    // uploaded to. That bucket answers a plain GET but sends no
+    // Access-Control-Allow-Origin, so pdf.js cannot read a resumed PDF and the
+    // member is shown an error where their document should be.
+    const link = doc ? buildDocumentUrl(doc) : null;
+    out.push(link ? { ...entry, attachedFileUrls: [link, ...entry.attachedFileUrls.slice(1)] } : entry);
     if (!doc?.OcrExtract) continue;
     let extracted;
     try {
       extracted = JSON.parse(doc.OcrExtract);
     } catch {
+      continue;
+    }
+    // A document OCR turned away carries why it was turned away, not fields: replay that reason
+    // rather than a confirmation card there is nothing to confirm. `ocrFailure` rides along so the
+    // translator rebuilds the sentence in the member's language, exactly as it does live.
+    if (extracted?.ocrFailed) {
+      out.push(buildOcrFailureMessage(extracted));
       continue;
     }
     // DocumentName is the caption the row was filed under, which is not always the

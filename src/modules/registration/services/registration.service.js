@@ -349,9 +349,11 @@ export function buildAccountImagePath(accountId, documentUrl) {
 // used for PERMANENT_ADDRESS_PROOF/CURRENT_ADDRESS_PROOF uploads, where the DB row stays generic
 // but the actual document might be a Driving Licence or Voter ID (see addressProofTypeMap.js).
 //
-// `deferUntilConfirmed` is the chat's: when OCR runs, nothing at all is written - neither the
+// `deferUntilConfirmed` is the chat's: when OCR reads a document, nothing is written - neither the
 // account fields OCR read nor the document row - and the caller saves it with confirmDocument() once
 // the member taps "Yes, confirm". The REST route has no confirmation step, so it saves immediately.
+// A document OCR REJECTS is the exception: there is nothing to confirm, so it is recorded here with
+// the reason, which is what lets a resumed chat show the attempt instead of silently asking again.
 async function saveDocument(userId, registrationId, docType, documentUrl, ocrDocType, { deferUntilConfirmed = false } = {}) {
   assertOwnRegistration(userId, registrationId);
 
@@ -364,6 +366,13 @@ async function saveDocument(userId, registrationId, docType, documentUrl, ocrDoc
     : null;
 
   if (ocrResult && deferUntilConfirmed) {
+    // A rejected document is kept too, with why it was rejected. Without it a resumed chat
+    // shows no trace of the attempt - no image, no reason, just the same question again - and
+    // nobody can see afterwards what was turned away. Only a rejection is written here; a
+    // document that read cleanly still waits for the member to confirm it.
+    if (!ocrResult.extracted) {
+      await recordRejectedDocument(account, registrationId, docType, documentUrl, effectiveOcrType, ocrResult);
+    }
     return {
       documentType: docType,
       documentUrl,
@@ -398,7 +407,46 @@ async function confirmDocument(userId, registrationId, { docType, documentUrl, o
   return toDocumentPublic(doc, { verified: true, extracted });
 }
 
-async function writeDocumentRow(account, registrationId, docType, documentUrl, ocrStatus, extracted = null) {
+// What OcrExtract holds for a document OCR turned away. `ocrFailure` is the structured context
+// the translator rebuilds the refusal from in the member's language; `failureReason` is the
+// reader's own English, kept for English members and for the logs.
+function buildFailureEnvelope(documentType, ocrResult) {
+  return {
+    ocrFailed: true,
+    documentType,
+    ocrFailure: ocrResult?.failureOcr ?? null,
+    failureReason: ocrResult?.failureReason ?? null,
+  };
+}
+
+/** The failure envelope on a document row, or null when the row holds a real extraction. */
+export function readDocumentFailure(doc) {
+  if (!doc?.OcrExtract) return null;
+  try {
+    const parsed = JSON.parse(doc.OcrExtract);
+    return parsed?.ocrFailed ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Never overwrites a document that already read cleanly: an address proof the member uploads,
+// switches away from, then fails on a different type must keep the extraction it had.
+async function recordRejectedDocument(account, registrationId, docType, documentUrl, documentType, ocrResult) {
+  try {
+    const rows = await registrationRepository.findDocumentsByAccountId(registrationId);
+    const existing = rows.find((row) => row.DocumentName === docType);
+    if (existing?.OcrExtract && !readDocumentFailure(existing)) return;
+
+    await writeDocumentRow(account, registrationId, docType, documentUrl, 0, null,
+      buildFailureEnvelope(documentType, ocrResult));
+  } catch (err) {
+    // Bookkeeping must never stand between the member and their next attempt.
+    logger.warn({ registrationId, docType, err }, 'Could not record the rejected document');
+  }
+}
+
+async function writeDocumentRow(account, registrationId, docType, documentUrl, ocrStatus, extracted = null, failure = null) {
   const pathKey = resolveDocPathKey(account);
   const documentLookupId = pathKey ? DOC_LOOKUP_ID_BY_PATH[pathKey]?.[docType] ?? null : null;
 
@@ -414,7 +462,9 @@ async function writeDocumentRow(account, registrationId, docType, documentUrl, o
     // own columns. The confirmation card shows the PAN number, the IFSC, the MICR -
     // none of which is stored anywhere else - so without this a resumed chat can show
     // the document but never what was read from it.
-    ocrExtract: extracted ? JSON.stringify(extracted) : null,
+    // A rejection goes in the same column under its own marker: the reader returned no fields
+    // to store, and what matters then is why. readDocumentFailure() tells the two apart.
+    ocrExtract: extracted ? JSON.stringify(extracted) : failure ? JSON.stringify(failure) : null,
   });
 
   if (docType === DOC_TYPES.PROFILE_PHOTO) {
