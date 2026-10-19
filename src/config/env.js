@@ -162,6 +162,14 @@ const envSchema = z.object({
   // Where each member's uploads are also copied, one folder per member (see
   // documentStorage.service.js). Blank turns the copy off.
   DOCUMENT_STORAGE_DIR: z.string().default('uploads/member-documents'),
+
+  /* Signed document links - a resumed chat reads its documents back through this
+     API, because the uploader's bucket sends no CORS headers. */
+  DOCUMENT_LINK_BASE_URL: z.string().default('https://api.iprsv2.choira.in'),
+  DOCUMENT_LINK_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  DOCUMENT_LINK_ALLOWED_HOSTS: z
+    .string()
+    .default('s3.us-east-1.amazonaws.com,s3.amazonaws.com'),
   // Also write every log line to this file (e.g. logs/backend.log). Blank = terminal only.
   LOG_FILE: z.string().optional().default(''),
 

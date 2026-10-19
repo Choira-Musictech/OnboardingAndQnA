@@ -27,6 +27,7 @@ import { conversationJournalRepository } from '../src/modules/conversation/repos
 import { handle } from '../src/modules/conversation/engines/registrationEngine.js';
 import { typebotSessionStore } from '../src/modules/conversation/services/typebot/typebotSessionStore.js';
 import { registrationReviewService } from '../src/modules/registration/services/registrationReview.service.js';
+import { registrationRepository } from '../src/modules/registration/repositories/registration.repository.js';
 import { workLinkService } from '../src/modules/work/services/workLink.service.js';
 import { esignService } from '../src/modules/esign/services/esign.service.js';
 import { PAYMENT_BLOCK_IDS } from '../src/modules/conversation/services/typebot/paymentBlockIds.js';
@@ -327,7 +328,12 @@ const texts = (res) =>
 function stubReplay(blockIds) {
   const real = { start: typebotClient.startChat, cont: typebotClient.continueChat };
   let position = 0;
-  typebotClient.startChat = async () => ({ sessionId: 'resume-session', messages: [], input: { id: blockIds[0] } });
+  typebotClient.startChat = async () => {
+    // A real startChat opens a new session at the first block; the replay counter has to
+    // restart with it, or a second resume in the same test walks off the end of the flow.
+    position = 0;
+    return { sessionId: 'resume-session', messages: [], input: { id: blockIds[0] } };
+  };
   typebotClient.continueChat = async () => {
     position += 1;
     const next = blockIds[position];
@@ -409,6 +415,59 @@ test('resuming hands back the replayed chat as history and no longer shows a sum
     ['answer-b1', 'answer-b2'],
   );
   assert.equal(/Here's what you told us earlier|Picking up where you left off/.test(texts(resumed)), false);
+});
+
+// A document OCR turned away used to leave no trace: no row was written and no turn was
+// journalled, so the member came back to the same upload question with no sign of the earlier
+// attempt and no reason for it. The rejection is recorded now - this is what they see of it.
+test('a resumed chat replays why a document was rejected', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  const documentUrl = 'https://s3.us-east-1.amazonaws.com/product008/public/pan.jpg';
+  await conversationJournalService.recordTurn({
+    userId,
+    blockId: 'b1',
+    answer: 'pan.jpg',
+    attachedFileUrls: [documentUrl],
+  });
+
+  const realDocs = registrationRepository.findDocumentsByAccountId;
+  registrationRepository.findDocumentsByAccountId = async () => [
+    {
+      AccountDocId: 1n,
+      DocumentName: 'PAN',
+      DocumentCaption: documentUrl,
+      OcrExtract: JSON.stringify({
+        ocrFailed: true,
+        documentType: 'PAN',
+        failureReason: 'This looks like a cancelled cheque, not a PAN card. Please upload your PAN card.',
+        ocrFailure: { code: 'WRONG_DOCUMENT', expectedDocument: 'PAN', detectedDocument: 'BANK' },
+      }),
+    },
+  ];
+  t.after(() => {
+    registrationRepository.findDocumentsByAccountId = realDocs;
+  });
+
+  const restoreClient = stubReplay(['b1', 'b2']);
+  t.after(restoreClient);
+
+  await handle({ userId, token: 't' });
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+  const rejection = (resumed.history ?? []).find((entry) => entry.id === 'ocr-extraction-failed');
+  assert.ok(rejection, 'the rejection is part of the replayed history');
+  assert.match(
+    (rejection.content?.richText ?? []).flatMap((node) => node.children ?? []).map((child) => child.text).join(''),
+    /cancelled cheque/,
+  );
+  // Rides along so the translator rebuilds the sentence in the member's language, as it does live.
+  assert.equal(rejection.ocrFailure?.code, 'WRONG_DOCUMENT');
+
+  // The document itself is read back through this API, not from the bucket it was uploaded to:
+  // that bucket sends no CORS headers, so pdf.js cannot read a resumed document.
+  const upload = (resumed.history ?? []).find((entry) => entry.sender === 'user' && entry.attachedFileUrls?.length);
+  assert.match(upload.attachedFileUrls[0], /\/documents\/1\/pan\.jpg\?e=\d+&t=/);
 });
 
 // Resuming onto the payment step must show the same review + signing notices the live relay does.
@@ -549,10 +608,36 @@ test('a language switch re-serves the current step instead of offering to resume
   const offer = await handle({ userId, token: 't' });
   assert.equal(offer.input?.id, 'resume-registration');
 
-  // The same empty call after a language switch goes straight to the question they were on.
+  // Taking the offer puts them back on the question they left off at.
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+  assert.equal(resumed.input?.id, 'b3');
+
+  // Switching language from there re-serves that same question - it must not greet a member
+  // who is already mid-flow with the resume choice all over again.
   const switched = await handle({ userId, token: 't', relocalize: true });
   assert.equal(switched.input?.id, 'b3');
   assert.notEqual(switched.input?.id, 'resume-registration');
+});
+
+// The other half of the same rule, and the reason the step above is not simply skipped: a member
+// still looking at "continue or start over" has not chosen yet, so a language switch shows them
+// that choice again in the new language rather than answering it on their behalf.
+test('a language switch while the resume offer is open shows the offer again', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  for (const blockId of ['b1', 'b2']) {
+    await conversationJournalService.recordTurn({ userId, blockId, answer: `answer-${blockId}` });
+  }
+
+  const restoreClient = stubReplay(['b1', 'b2', 'b3']);
+  t.after(restoreClient);
+
+  const offer = await handle({ userId, token: 't' });
+  assert.equal(offer.input?.id, 'resume-registration');
+
+  const switched = await handle({ userId, token: 't', relocalize: true });
+  assert.equal(switched.input?.id, 'resume-registration', 'the choice is still theirs to make');
+  assert.equal(await conversationJournalService.countTurns(userId), 2, 'journal untouched');
 });
 
 test('a language switch with nothing journalled starts a normal chat, not a resume offer', async (t) => {

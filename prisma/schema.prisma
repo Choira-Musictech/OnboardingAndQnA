@@ -502,7 +502,12 @@ model MemberRoleTypeLookUpFees {
 /// shows this table being used).
 model AppAccountsRegPayment {
   PaymentRecieptId       BigInt    @id(map: "PK_App_Accounts_RegPayment") @default(autoincrement())
-  AccountId              BigInt
+  // Nullable in the database, and 31 legacy rows really are NULL (the same rows that carry an
+  // empty TransactionNo). Declared required, every one of them broke any read that touched it:
+  // "Error converting field AccountId of expected non-nullable type". Nothing reachable reads a
+  // payment without filtering on a real AccountId or TransactionNo, so those rows are only ever
+  // in the way of the client.
+  AccountId              BigInt?
   TransactionNo          String?   @unique(map: "UQ_App_Accounts_RegPayment_TransactionNo") @db.NVarChar(100)
   PaymentRecieptNo       String?   @db.NVarChar(100)
   PaymentStatus          Int?      @db.TinyInt

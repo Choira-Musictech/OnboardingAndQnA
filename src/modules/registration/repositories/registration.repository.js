@@ -100,6 +100,11 @@ function findDocumentsByAccountId(accountId) {
   return prisma.appAccountsDoc.findMany({ where: { AccountId: BigInt(accountId) } });
 }
 
+// One document, for serving its bytes back through a signed link.
+function findDocumentById(accountDocId) {
+  return prisma.appAccountsDoc.findUnique({ where: { AccountDocId: BigInt(accountDocId) } });
+}
+
 export const registrationRepository = {
   findByAccountId,
   findByAccountEmail,
@@ -108,4 +113,5 @@ export const registrationRepository = {
   update,
   upsertDocument,
   findDocumentsByAccountId,
+  findDocumentById,
 };
