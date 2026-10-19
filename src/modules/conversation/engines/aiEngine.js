@@ -25,6 +25,8 @@ export async function handle(input) {
   if (returning) {
     const text = paymentService.registrationCompleteText(input.userId);
     if (text) return { reply: text };
+    // The payment-status response just showed the card to this same page load - nothing more to say.
+    if (paymentService.paymentCardJustShown(input.userId)) return { reply: '', sessionEnded: true };
     return { reply: paymentService.welcomeBackText(input.userId) };
   }
 
