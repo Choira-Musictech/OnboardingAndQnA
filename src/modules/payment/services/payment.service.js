@@ -54,6 +54,17 @@ function generateTxnId(userId) {
 // account (a repeat payment-status poll, a session resume via aiEngine, or both in one page load).
 const registrationCompleteNotified = new Set();
 
+// When the card above went out as a payment-status response. Coming back from PayU, the chat asks
+// for the conversation and for the payment status at the same moment; if the payment status wins,
+// the chat reload must not add a "Welcome back" right under the fresh "Thank You" card.
+const CARD_JUST_SHOWN_MS = 60_000;
+const paymentCardShownAt = new Map();
+
+function paymentCardJustShown(registrationId) {
+  const shownAt = paymentCardShownAt.get(String(registrationId));
+  return shownAt !== undefined && Date.now() - shownAt < CARD_JUST_SHOWN_MS;
+}
+
 function emailLine() {
   const contact = env.IPRS_CONTACT_EMAIL?.trim();
   return contact ? `\nIPRS Email ID: ${contact}` : '';
@@ -79,6 +90,7 @@ function welcomeBackText(registrationId) {
 function registrationCompleteMessage(registrationId) {
   const text = registrationCompleteText(registrationId);
   if (!text) return null;
+  paymentCardShownAt.set(String(registrationId), Date.now());
   return {
     id: 'registration-complete',
     type: 'text',
@@ -433,6 +445,8 @@ export const paymentService = {
   getPaymentHistory,
   hasSuccessfulPayment,
   registrationCompleteText,
+  registrationCompleteMessage,
+  paymentCardJustShown,
   welcomeBackText,
   PAYMENT_STATUS,
   toPublic,

@@ -42,6 +42,14 @@ test('a relogin shows the payment card first, then the same block under a welcom
   }
 });
 
+test('coming back from PayU, the chat reload adds no welcome back under the card the payment status just showed', async () => {
+  assert.ok(paymentService.registrationCompleteMessage('900004'), 'the payment status shows the card');
+
+  const reload = await handle({ userId: '900004' });
+  assert.equal(reload.reply, '');
+  assert.equal(reload.sessionEnded, true);
+});
+
 test('a typed message after completing still gets the plain reply', async () => {
   assert.equal((await handle({ userId: '900003', message: 'hi' })).reply, 'Your registration is complete. Thank you!');
 });
