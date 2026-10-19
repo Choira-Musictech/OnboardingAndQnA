@@ -11,15 +11,19 @@ import { PAGE_MARGIN, renderApplicationForm, renderFooter } from '../templates/a
 import { applicationDataService } from './applicationData.service.js';
 
 const RENDER_TIMEOUT_MS = 30_000;
+// Starting Chrome can take a while on a busy or low-memory machine (puppeteer's own default is 30 s).
+const LAUNCH_TIMEOUT_MS = 90_000;
 
 let browserPromise = null;
 
 function getBrowser() {
   if (!browserPromise) {
-    browserPromise = puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] }).catch((err) => {
-      browserPromise = null;
-      throw err;
-    });
+    browserPromise = puppeteer
+      .launch({ headless: true, timeout: LAUNCH_TIMEOUT_MS, args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+      .catch((err) => {
+        browserPromise = null;
+        throw err;
+      });
   }
   return browserPromise;
 }

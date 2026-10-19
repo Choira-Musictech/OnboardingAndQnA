@@ -37,9 +37,10 @@ export const status = async (req, res, next) => {
   }
 };
 
-// emSigner sends the member's browser here (GET or POST) after signing. The member is always
-// forwarded to the frontend's result page, which reads the real status from GET /esign/status.
-export const emSignerReturn = async (req, res, next) => {
+// emSigner or DocuSign sends the member's browser here after signing (DocuSign adds ?event=..., which
+// is ignored - the status is always asked of the provider). The member is always forwarded to the
+// frontend's result page, which reads the real status from GET /esign/status.
+export const providerReturn = async (req, res, next) => {
   try {
     const eSignId = req.query.esign ?? req.body?.esign;
     const result = await esignService.handleProviderReturn(eSignId);

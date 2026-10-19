@@ -13,6 +13,7 @@ const STORAGE = fs.mkdtempSync(path.join(os.tmpdir(), 'esign-test-'));
 process.env.ESIGN_ENABLED = 'true';
 process.env.EMSIGNER_RETURN_URL = 'https://backend.example/esign/emsigner/return';
 process.env.EMSIGNER_INITIATOR_EMAIL = 'initiator@iprs.example';
+process.env.DOCUSIGN_RETURN_URL = 'https://backend.example/esign/docusign/return';
 process.env.ESIGN_STORAGE_DIR = STORAGE;
 
 const { EmSignerClient } = await import('../src/modules/esign/services/emsigner.client.js');
@@ -126,6 +127,7 @@ test('emSigner: reads the workflow status and decodes the signed PDF', async () 
 let account;
 let rows;
 let provider;
+let docuSign;
 let savedDocuments;
 
 beforeEach(() => {
@@ -147,6 +149,26 @@ beforeEach(() => {
     },
   };
   esignProviders.emSigner = provider;
+  docuSign = {
+    started: [],
+    links: [],
+    status: 'sent',
+    async initiateSigning(input) {
+      this.started.push(input);
+      return { workflowId: 'env-1', documentId: '1', url: 'https://docusign.example/view-1', raw: {} };
+    },
+    async createSigningUrl(input) {
+      this.links.push(input);
+      return `https://docusign.example/view-${this.links.length + 1}`;
+    },
+    async getWorkflowStatus() {
+      return { status: this.status, raw: {} };
+    },
+    async downloadSignedPdf() {
+      return Buffer.from('%PDF docusign signed');
+    },
+  };
+  esignProviders.docuSign = docuSign;
 
   registrationRepository.findByAccountId = async () => account;
   registrationRepository.upsertDocument = async (doc) => {
@@ -192,10 +214,65 @@ test('an open signing link is reused, and a finished signing is not started agai
   assert.deepEqual(await esignService.start('20490'), { status: 'COMPLETED', signingUrl: null });
 });
 
-test('NRI members are not asked to sign yet, and cannot start a signing', async () => {
-  account.AccountRegType = 'NI';
+test('a member with no membership type yet cannot start a signing', async () => {
+  account.AccountRegType = null;
   assert.equal(await esignService.isRequired('20490'), false);
   await assert.rejects(esignService.start('20490'), /not available for this membership type/);
+});
+
+test('NRI members (NI / NC) sign with DocuSign, as an embedded signer with our return URL', async () => {
+  for (const regType of ['NI', 'NC']) {
+    rows = [];
+    docuSign.started = [];
+    account.AccountRegType = regType;
+    assert.equal(await esignService.isRequired('20490'), true);
+    assert.equal(await esignService.providerForUser('20490'), 'DOCUSIGN');
+
+    const result = await esignService.start('20490');
+    assert.deepEqual(result, { status: 'INITIATED', signingUrl: 'https://docusign.example/view-1' });
+    assert.equal(rows[0].Provider, 'DOCUSIGN');
+    assert.equal(rows[0].ProviderRefId, 'env-1');
+    const [input] = docuSign.started;
+    assert.equal(input.returnUrl, 'https://backend.example/esign/docusign/return?esign=1');
+    assert.equal(input.clientUserId, '20490');
+    assert.equal(input.signerName, 'Test Member');
+    assert.equal(input.anchorText, 'sign_here');
+    assert.equal(provider.started.length, 0, 'eMudhra is not used');
+  }
+});
+
+test('an unfinished DocuSign envelope gets a fresh link, not a second envelope', async () => {
+  account.AccountRegType = 'NI';
+  await esignService.start('20490');
+  docuSign.status = 'delivered';
+  const again = await esignService.start('20490');
+
+  assert.equal(docuSign.started.length, 1, 'one envelope');
+  assert.equal(docuSign.links.length, 1);
+  assert.equal(docuSign.links[0].envelopeId, 'env-1');
+  assert.equal(docuSign.links[0].clientUserId, '20490', 'the link is for the same embedded signer');
+  assert.deepEqual(again, { status: 'INITIATED', signingUrl: 'https://docusign.example/view-2' });
+  assert.equal(rows[0].SigningUrl, 'https://docusign.example/view-2');
+});
+
+test('the DocuSign return is checked with DocuSign: completed saves the signed form, declined fails', async () => {
+  account.AccountRegType = 'NC';
+  await esignService.start('20490');
+  assert.equal(await esignService.handleProviderReturn('1'), 'INITIATED', 'still out for signing');
+
+  docuSign.status = 'completed';
+  assert.equal(await esignService.handleProviderReturn('1'), 'COMPLETED');
+  assert.ok(fs.readFileSync(path.resolve(rows[0].SignedPdfPath)).toString().startsWith('%PDF docusign signed'));
+  assert.equal(savedDocuments[0].caption, 'SIGNED_APPLICATION');
+
+  rows = [];
+  docuSign.status = 'sent';
+  await esignService.start('20490');
+  docuSign.status = 'declined';
+  assert.equal(await esignService.handleProviderReturn('1'), 'FAILED');
+  docuSign.status = 'sent';
+  await esignService.start('20490');
+  assert.equal(docuSign.started.length, 3, 'a declined envelope is replaced by a new one');
 });
 
 test('a provider failure marks the attempt FAILED and is reported', async () => {
@@ -254,22 +331,24 @@ test('the status call confirms an open signing with emSigner', async () => {
 
 // --- chat gate and payment guard ------------------------------------------
 
-test('the chat asks for a signature only while an Indian member has not signed', async () => {
-  assert.equal(await needsSignature('20490'), true);
-  rows.push({ ESignId: 1n, Status: 'COMPLETED' });
-  assert.equal(await needsSignature('20490'), false);
-
-  rows = [];
-  account.AccountRegType = 'NC';
-  assert.equal(await needsSignature('20490'), false);
+test('the chat asks for a signature only while the member has not signed - Indian or NRI', async () => {
+  for (const regType of ['I', 'C', 'NI', 'NC']) {
+    rows = [];
+    account.AccountRegType = regType;
+    assert.equal(await needsSignature('20490'), true, regType);
+    rows.push({ ESignId: 1n, Status: 'COMPLETED' });
+    assert.equal(await needsSignature('20490'), false, regType);
+  }
 });
 
-test('payment cannot start before the application is signed', async () => {
-  userRepository.findById = async () => ({ ...account, AccountRegType: 'I' });
+test('payment cannot start before the application is signed - Indian or NRI', async () => {
   paymentRepository.hasSuccessfulPayment = async () => false;
-
-  await assert.rejects(
-    paymentService.initiatePayment({ userId: '20490' }),
-    (err) => err.errorCode === 'ESIGN_REQUIRED' && err.statusCode === 403,
-  );
+  for (const regType of ['I', 'NI']) {
+    userRepository.findById = async () => ({ ...account, AccountRegType: regType });
+    await assert.rejects(
+      paymentService.initiatePayment({ userId: '20490' }),
+      (err) => err.errorCode === 'ESIGN_REQUIRED' && err.statusCode === 403,
+      regType,
+    );
+  }
 });

@@ -2,8 +2,7 @@
 // E-signing of the member's application form - review -> sign -> payment.
 //
 // Who signs with what (IPRS's own routing): AccountRegType I / C (Indian individual / company)
-// sign with eMudhra emSigner Aadhaar eSign; NI / NC (NRI) will sign with DocuSign, which is not
-// built yet - until it is, NRI members are not asked to sign (isRequired() is false for them).
+// sign with eMudhra emSigner Aadhaar eSign; NI / NC (NRI) sign with DocuSign embedded signing.
 //
 // Rules this service keeps (from IPRS's integration guide):
 //   - The App_Accounts_ESign row exists BEFORE the member is sent to the provider, and the return
@@ -24,28 +23,41 @@ import { esignRepository } from '../repositories/esign.repository.js';
 import { SIGNATURE_BOX } from '../templates/applicationForm.js';
 import { applicationPdfService } from './applicationPdf.service.js';
 import { SIGNED_APPLICATION_DOCUMENT } from './applicationData.service.js';
+import { docuSignClient } from './docusign.client.js';
 import { emSignerClient } from './emsigner.client.js';
 
 export const ESIGN_PROVIDERS = Object.freeze({ EMSIGNER: 'EMSIGNER', DOCUSIGN: 'DOCUSIGN' });
 export const ESIGN_STATUS = Object.freeze({ INITIATED: 'INITIATED', COMPLETED: 'COMPLETED', FAILED: 'FAILED' });
 
-// emSigner workflowStatus values that mean the member can no longer sign this workflow.
-const EMSIGNER_DEAD_STATUSES = ['recalled', 'expired', 'rejected', 'declined'];
+// Provider statuses that mean the member can no longer sign this workflow / envelope
+// (emSigner workflowStatus, DocuSign envelope status).
+const DEAD_STATUSES = ['recalled', 'expired', 'rejected', 'declined', 'voided'];
 
-// An unfinished signing link is reused for this long instead of starting a second workflow.
+// An unfinished emSigner link is reused for this long instead of starting a second workflow.
+// (DocuSign links work once, so an unfinished envelope always gets a fresh link instead.)
 const REUSE_OPEN_SIGNING_MS = 30 * 60_000;
 
 const PROVIDER_BY_REG_TYPE = Object.freeze({
   [REG_TYPES.INDIVIDUAL]: ESIGN_PROVIDERS.EMSIGNER,
   [REG_TYPES.PUBLISHER]: ESIGN_PROVIDERS.EMSIGNER,
-  // NI / NC -> DOCUSIGN once that provider is built.
+  [REG_TYPES.NRI_INDIVIDUAL]: ESIGN_PROVIDERS.DOCUSIGN,
+  [REG_TYPES.NRI_PUBLISHER]: ESIGN_PROVIDERS.DOCUSIGN,
 });
 
 // Swappable in tests, same technique verifyGate.js's verifyProvider export uses.
-export const esignProviders = { emSigner: emSignerClient };
+export const esignProviders = { emSigner: emSignerClient, docuSign: docuSignClient };
+
+function clientFor(provider) {
+  return provider === ESIGN_PROVIDERS.DOCUSIGN ? esignProviders.docuSign : esignProviders.emSigner;
+}
 
 function providerFor(account) {
   return PROVIDER_BY_REG_TYPE[String(account?.AccountRegType ?? '').trim()] ?? null;
+}
+
+/** Which provider this member signs with (null when e-signing does not apply to them). */
+async function providerForUser(userId) {
+  return providerFor(await registrationRepository.findByAccountId(userId));
 }
 
 /** Whether this member must sign before paying. */
@@ -70,11 +82,12 @@ async function savePdf(accountId, fileName, pdf) {
   return relative.split(path.sep).join('/');
 }
 
-function returnUrlFor(eSignId) {
-  if (!env.EMSIGNER_RETURN_URL) {
+function returnUrlFor(eSignId, provider) {
+  const base = provider === ESIGN_PROVIDERS.DOCUSIGN ? env.DOCUSIGN_RETURN_URL : env.EMSIGNER_RETURN_URL;
+  if (!base) {
     throw appError('E-signing return URL is not configured', { statusCode: 503, errorCode: 'ESIGN_NOT_CONFIGURED' });
   }
-  const url = new URL(env.EMSIGNER_RETURN_URL);
+  const url = new URL(base);
   url.searchParams.set('esign', String(eSignId));
   return url.toString();
 }
@@ -105,15 +118,41 @@ async function start(userId, { ip } = {}) {
 
   if (await esignRepository.hasCompletedSigning(userId)) return { status: ESIGN_STATUS.COMPLETED, signingUrl: null };
 
-  const latest = await esignRepository.findLatestSigning(userId);
-
-  const openFor = latest?.CreateDate ? Date.now() - new Date(latest.CreateDate).getTime() : Infinity;
-  if (latest?.Status === ESIGN_STATUS.INITIATED && latest.SigningUrl && openFor < REUSE_OPEN_SIGNING_MS) {
-    return { status: ESIGN_STATUS.INITIATED, signingUrl: latest.SigningUrl };
-  }
-
   const signerEmail = String(account.AccountEmail ?? '').trim();
   if (!signerEmail) throw badRequestError('An email address is needed before signing');
+  // DocuSign shows this name on the signature; it must match between the envelope and every link.
+  const signerName = String(account.AccountName ?? '').trim() || signerEmail;
+
+  let latest = await esignRepository.findLatestSigning(userId);
+
+  if (provider === ESIGN_PROVIDERS.DOCUSIGN && latest?.Provider === provider && latest.Status === ESIGN_STATUS.INITIATED && latest.ProviderRefId) {
+    // An envelope is already out: ask where it stands, and if it is still open hand the member a fresh
+    // one-time link to it rather than sending a second envelope.
+    latest = await refresh(latest);
+    if (latest.Status === ESIGN_STATUS.COMPLETED) return { status: ESIGN_STATUS.COMPLETED, signingUrl: null };
+    if (latest.Status === ESIGN_STATUS.INITIATED) {
+      const signingUrl = await esignProviders.docuSign.createSigningUrl({
+        envelopeId: latest.ProviderRefId,
+        signerEmail,
+        signerName,
+        clientUserId: String(userId),
+        returnUrl: returnUrlFor(latest.ESignId, provider),
+      });
+      await esignRepository.updateSigning(latest.ESignId, { SigningUrl: signingUrl });
+      return { status: ESIGN_STATUS.INITIATED, signingUrl };
+    }
+  }
+
+  const openFor = latest?.CreateDate ? Date.now() - new Date(latest.CreateDate).getTime() : Infinity;
+  if (
+    provider === ESIGN_PROVIDERS.EMSIGNER &&
+    latest?.Provider === provider &&
+    latest.Status === ESIGN_STATUS.INITIATED &&
+    latest.SigningUrl &&
+    openFor < REUSE_OPEN_SIGNING_MS
+  ) {
+    return { status: ESIGN_STATUS.INITIATED, signingUrl: latest.SigningUrl };
+  }
 
   const row = await esignRepository.createSigning({ accountId: userId, provider, status: ESIGN_STATUS.INITIATED });
   const eSignId = String(row.ESignId);
@@ -122,15 +161,30 @@ async function start(userId, { ip } = {}) {
     const { pdf, data } = await applicationPdfService.generate(userId, { ip, guid: crypto.randomUUID() });
     const unsignedPdfPath = await savePdf(userId, `application-${eSignId}.pdf`, pdf);
 
-    const started = await esignProviders.emSigner.initiateSigning({
-      name: `IPRS Application ${data.applicationNo}`,
-      initiatorEmail: env.EMSIGNER_INITIATOR_EMAIL,
-      signerEmail,
-      redirectUrl: returnUrlFor(eSignId),
-      documentName: `IPRS-Application-${data.applicationNo}.pdf`,
-      pdf,
-      signatureBox: { page: SIGNATURE_BOX.page, ...SIGNATURE_BOX.pt, pageHeight: SIGNATURE_BOX.pageHeightPt },
-    });
+    const returnUrl = returnUrlFor(eSignId, provider);
+    const name = `IPRS Application ${data.applicationNo}`;
+    const documentName = `IPRS-Application-${data.applicationNo}.pdf`;
+    const started =
+      provider === ESIGN_PROVIDERS.DOCUSIGN
+        ? await esignProviders.docuSign.initiateSigning({
+            name,
+            signerEmail,
+            signerName,
+            clientUserId: String(userId),
+            returnUrl,
+            documentName,
+            pdf,
+            anchorText: SIGNATURE_BOX.anchorText,
+          })
+        : await esignProviders.emSigner.initiateSigning({
+            name,
+            initiatorEmail: env.EMSIGNER_INITIATOR_EMAIL,
+            signerEmail,
+            redirectUrl: returnUrl,
+            documentName,
+            pdf,
+            signatureBox: { page: SIGNATURE_BOX.page, ...SIGNATURE_BOX.pt, pageHeight: SIGNATURE_BOX.pageHeightPt },
+          });
 
     await esignRepository.updateSigning(eSignId, {
       ProviderRefId: started.workflowId,
@@ -139,7 +193,7 @@ async function start(userId, { ip } = {}) {
       UnsignedPdfPath: unsignedPdfPath,
       ResponseJson: JSON.stringify(started.raw),
     });
-    logger.info({ userId, eSignId, workflowId: started.workflowId }, 'E-signing started');
+    logger.info({ userId, eSignId, provider, workflowId: started.workflowId }, 'E-signing started');
     return { status: ESIGN_STATUS.INITIATED, signingUrl: started.url };
   } catch (err) {
     await esignRepository
@@ -153,13 +207,14 @@ async function start(userId, { ip } = {}) {
 // downloads the signed PDF; anything the member can no longer finish becomes FAILED.
 async function refresh(row) {
   if (row.Status !== ESIGN_STATUS.INITIATED || !row.ProviderRefId) return row;
-  if (row.Provider !== ESIGN_PROVIDERS.EMSIGNER) return row;
+  if (!Object.values(ESIGN_PROVIDERS).includes(row.Provider)) return row;
+  const client = clientFor(row.Provider);
 
-  const { status, raw } = await esignProviders.emSigner.getWorkflowStatus(row.ProviderRefId);
+  const { status, raw } = await client.getWorkflowStatus(row.ProviderRefId);
   const normalized = String(status ?? '').trim().toLowerCase();
 
   if (normalized === 'completed') {
-    const signed = await esignProviders.emSigner.downloadSignedPdf(row.ProviderRefId);
+    const signed = await client.downloadSignedPdf(row.ProviderRefId);
     const signedPdfPath = await savePdf(row.AccountId, `application-${row.ESignId}-signed.pdf`, signed);
     const account = await registrationRepository.findByAccountId(row.AccountId);
     await registrationRepository.upsertDocument({
@@ -178,7 +233,7 @@ async function refresh(row) {
     });
   }
 
-  if (EMSIGNER_DEAD_STATUSES.includes(normalized)) {
+  if (DEAD_STATUSES.includes(normalized)) {
     return esignRepository.updateSigning(row.ESignId, { Status: ESIGN_STATUS.FAILED, ResponseJson: JSON.stringify(raw) });
   }
   return row;
@@ -222,4 +277,4 @@ async function getStatus(userId) {
   return toPublic(row, required);
 }
 
-export const esignService = { start, handleProviderReturn, getStatus, isRequired, isRequiredFor, isSigned };
+export const esignService = { start, handleProviderReturn, getStatus, isRequired, isRequiredFor, isSigned, providerForUser };

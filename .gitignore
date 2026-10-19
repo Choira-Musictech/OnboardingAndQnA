@@ -32,6 +32,9 @@ Thumbs.db
 # Member documents copied by documentStorage.service.js - identity documents, never commit
 uploads/
 
+# Provider private keys (DocuSign JWT) - never commit
+keys/
+
 # Temp
 coverage/
 .tmp/

@@ -443,6 +443,59 @@ for (const { signed, expectNotice, expectSignRequired } of [
   });
 }
 
+test('when the signed-or-not lookup fails, the chat never claims the application is signed', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+
+  // e.g. the App_Accounts_ESign table is missing on this database.
+  const real = { required: esignService.isRequired, signed: esignService.isSigned };
+  esignService.isRequired = async () => true;
+  esignService.isSigned = async () => {
+    throw new Error('Invalid object name App_Accounts_ESign');
+  };
+  const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
+  t.after(() => {
+    restoreClient();
+    esignService.isRequired = real.required;
+    esignService.isSigned = real.signed;
+  });
+
+  await handle({ userId, token: 't' });
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+  assert.equal(resumed.isPaymentStep, true);
+  assert.ok(resumed.messages.some((m) => m.id === 'payment-review'), 'the review is still shown');
+  assert.doesNotMatch(texts(resumed), /Your application is signed/);
+  assert.doesNotMatch(texts(resumed), /Please sign your application/);
+});
+
+test('an NRI member on the payment step is asked to sign with DocuSign, not Aadhaar', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+
+  const real = { required: esignService.isRequired, signed: esignService.isSigned, provider: esignService.providerForUser };
+  esignService.isRequired = async () => true;
+  esignService.isSigned = async () => false;
+  esignService.providerForUser = async () => 'DOCUSIGN';
+  const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
+  t.after(() => {
+    restoreClient();
+    esignService.isRequired = real.required;
+    esignService.isSigned = real.signed;
+    esignService.providerForUser = real.provider;
+  });
+
+  await handle({ userId, token: 't' });
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+  assert.equal(resumed.signRequired, true);
+  assert.equal(resumed.signProvider, 'DOCUSIGN');
+  assert.match(texts(resumed), /sign it online with DocuSign/);
+  assert.doesNotMatch(texts(resumed), /Aadhaar/);
+});
+
 // A member who has signed is never offered "Start over".
 test('a signed member resumes straight away on an empty start call, with no continue/start-over prompt', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');

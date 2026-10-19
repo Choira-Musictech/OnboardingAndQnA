@@ -46,8 +46,16 @@ import {
   describePaymentPending,
   describePaymentReceived,
 } from '../services/typebot/paymentGate.js';
-import { describeSignDone, describeSignPending, describeSignRequired, isApplicationSigned, needsSignature } from '../services/typebot/esignGate.js';
-import { esignService } from '../../esign/services/esign.service.js';
+import {
+  describeSignDone,
+  describeSignPending,
+  describeSignRequired,
+  isApplicationSigned,
+  needsSignature,
+  SIGNATURE_STATE,
+  signatureState,
+  signProviderFor,
+} from '../services/typebot/esignGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
 import { registrationReviewService } from '../../registration/services/registrationReview.service.js';
 import { documentStorageService } from '../../registration/services/documentStorage.service.js';
@@ -643,10 +651,12 @@ async function resumeFromJournal({ userId, token }) {
 async function withPaymentReview({ userId, messages, input, extra = {} }) {
   try {
     const sections = await registrationReviewService.buildReview(userId);
+    // Only say what is known: "signed" needs a positive answer, a failed lookup says nothing.
     let signNotice = [];
-    if (await needsSignature(userId)) {
-      signNotice = [textMessage('esign-required', describeSignRequired())];
-    } else if (await esignService.isRequired(userId).catch(() => false)) {
+    const state = await signatureState(userId);
+    if (state === SIGNATURE_STATE.REQUIRED) {
+      signNotice = [textMessage('esign-required', describeSignRequired(await signProviderFor(userId)))];
+    } else if (state === SIGNATURE_STATE.SIGNED) {
       signNotice = [textMessage('esign-done', describeSignDone())];
     }
 
@@ -701,10 +711,12 @@ export async function handle(args) {
 
 // isPaymentStep, plus signRequired: on the payment step, the application still has to be e-signed
 // first (esignGate.js) - the frontend shows the sign card instead of the payment button.
+// signProvider tells the card how the member signs (EMSIGNER = Aadhaar OTP, DOCUSIGN = NRI).
 async function withStepFlags(userId, result) {
   const paymentStep = isPaymentStep(result.input?.id);
   const signRequired = paymentStep ? await needsSignature(userId) : false;
-  return { ...result, isPaymentStep: paymentStep, signRequired };
+  const signProvider = signRequired ? await signProviderFor(userId) : null;
+  return { ...result, isPaymentStep: paymentStep, signRequired, signProvider };
 }
 
 async function handleCore({ userId, token, message, attachedFileUrls, relocalize }) {

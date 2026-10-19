@@ -7,9 +7,10 @@ import * as esignController from '../controllers/esign.controller.js';
 
 const router = Router();
 
-// emSigner's redirect after signing (public - the browser arrives without our token).
-router.get('/emsigner/return', esignController.emSignerReturn);
-router.post('/emsigner/return', esignController.emSignerReturn);
+// The providers' redirects after signing (public - the browser arrives without our token).
+router.get('/emsigner/return', esignController.providerReturn);
+router.post('/emsigner/return', esignController.providerReturn);
+router.get('/docusign/return', esignController.providerReturn);
 
 router.get('/preview', authenticate, esignController.preview);
 router.post('/start', authenticate, esignController.start);

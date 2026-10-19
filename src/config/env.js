@@ -204,6 +204,17 @@ const envSchema = z.object({
   // Public URL of GET /esign/emsigner/return - emSigner sends the member's browser there.
   EMSIGNER_RETURN_URL: z.string().optional(),
   EMSIGNER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  // DocuSign embedded signing for NRI members (AccountRegType NI / NC), JWT grant as IPRS's user.
+  DOCUSIGN_INTEGRATION_KEY: z.string().optional(),
+  DOCUSIGN_USER_ID: z.string().optional(),
+  DOCUSIGN_ACCOUNT_ID: z.string().optional(),
+  DOCUSIGN_AUTH_SERVER: z.string().default('account-d.docusign.com'),
+  DOCUSIGN_BASE_PATH: z.string().default('https://demo.docusign.net/restapi'),
+  // RSA private key of the integration (PEM file, kept out of git - see keys/ in .gitignore).
+  DOCUSIGN_PRIVATE_KEY_PATH: z.string().optional(),
+  // Public URL of GET /esign/docusign/return - DocuSign sends the member's browser there.
+  DOCUSIGN_RETURN_URL: z.string().optional(),
+  DOCUSIGN_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   // Frontend page the member lands on after signing (?status=...).
   ESIGN_RESULT_URL: z.string().default('http://localhost:5173/esign/result'),
   // Where unsigned and signed PDFs are kept (relative to the backend folder).
