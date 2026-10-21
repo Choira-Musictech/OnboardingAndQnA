@@ -417,6 +417,81 @@ test('resuming hands back the replayed chat as history and no longer shows a sum
   assert.equal(/Here's what you told us earlier|Picking up where you left off/.test(texts(resumed)), false);
 });
 
+// The follow-up questions after "Yes, that's my song" are asked by the backend, not Typebot, so they
+// never reach the journal - the resumed chat shows each saved song's details under its link instead.
+const SONG_URL = 'https://open.spotify.com/track/abc';
+const savedSong = {
+  WorkNotificationId: 7,
+  DigitalLink: SONG_URL,
+  SongName: 'Tum Hi Ho',
+  Film_AlbumName: 'Aashiqui 2',
+  Publisher: 'T-Series',
+  WorkCategory: 'Film',
+  LanguageNames: 'Hindi',
+  ReleaseYear: 2013,
+};
+
+async function resumeWithSongs(t, getWorkLinks) {
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: SONG_URL });
+  await conversationJournalService.recordTurn({ userId, blockId: 'b2', answer: 'answer-b2' });
+
+  const realGet = workLinkService.getWorkLinks;
+  workLinkService.getWorkLinks = getWorkLinks;
+  const restoreClient = stubReplay(['b1', 'b2', 'b3']);
+  t.after(() => {
+    workLinkService.getWorkLinks = realGet;
+    restoreClient();
+  });
+
+  await handle({ userId, token: 't' });
+  return handle({ userId, token: 't', message: 'Continue where I left off' });
+}
+
+const cardText = (entry) => entry?.content?.richText?.[0]?.children?.[0]?.text ?? '';
+
+test('a resumed chat shows the saved song details right under the link the member pasted', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const resumed = await resumeWithSongs(t, async () => [savedSong]);
+
+  const at = resumed.history.findIndex((e) => e.sender === 'user' && e.answer === SONG_URL);
+  const card = resumed.history[at + 1];
+  assert.equal(card?.sender, 'bot');
+  assert.equal(
+    cardText(card),
+    'Song details saved\n\nSong: Tum Hi Ho\nFilm/Album: Aashiqui 2\nPublisher: T-Series\nCategory: Film\nLanguage: Hindi\nReleased: 2013',
+  );
+});
+
+test('a saved song shows only the details on file', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const resumed = await resumeWithSongs(t, async () => [
+    { ...savedSong, Film_AlbumName: null, Publisher: null, ReleaseYear: null },
+  ]);
+
+  const card = resumed.history.find((e) => String(e.id).startsWith('song-details-'));
+  assert.equal(cardText(card), 'Song details saved\n\nSong: Tum Hi Ho\nCategory: Film\nLanguage: Hindi');
+});
+
+test('a saved song whose link is not in the transcript still gets its card, after the last link', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const other = { ...savedSong, WorkNotificationId: 8, DigitalLink: 'https://youtu.be/xyz', SongName: 'Second song' };
+  const resumed = await resumeWithSongs(t, async () => [savedSong, other]);
+
+  const ids = resumed.history.filter((e) => String(e.id).startsWith('song-details-')).map((e) => e.id);
+  assert.deepEqual(ids, ['song-details-7', 'song-details-8']);
+});
+
+test('when the saved songs cannot be read, the resumed chat is the same as before', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const resumed = await resumeWithSongs(t, async () => {
+    throw new Error('table missing');
+  });
+
+  assert.equal(resumed.history.some((e) => String(e.id).startsWith('song-details-')), false);
+  assert.deepEqual(resumed.history.filter((e) => e.sender === 'user').map((e) => e.answer), [SONG_URL, 'answer-b2']);
+});
+
 // A document OCR turned away used to leave no trace: no row was written and no turn was
 // journalled, so the member came back to the same upload question with no sign of the earlier
 // attempt and no reason for it. The rejection is recorded now - this is what they see of it.

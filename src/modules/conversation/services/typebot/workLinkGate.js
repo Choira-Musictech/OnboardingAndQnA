@@ -95,6 +95,22 @@ export function describeSong(resolved) {
   return `${lines.join('\n')}\n\nIs this your song?`;
 }
 
+// What a resumed chat shows under a link the member pasted earlier: the song as saved, including the
+// answers to the follow-up questions (workDetailsGate.js) that never reach the conversation journal.
+// Only fields on file are listed; null when nothing but the link is known.
+export function describeSavedSong(row) {
+  const fields = [
+    ['Song', row?.SongName],
+    ['Film/Album', row?.Film_AlbumName],
+    ['Publisher', row?.Publisher],
+    ['Category', row?.WorkCategory],
+    ['Language', row?.LanguageNames],
+    ['Released', row?.ReleaseYear],
+  ];
+  const lines = fields.filter(([, value]) => value != null && String(value).trim()).map(([label, value]) => `${label}: ${value}`);
+  return lines.length ? `Song details saved\n\n${lines.join('\n')}` : null;
+}
+
 // Members are invited to give more than one name: a legal name, a stage name and an abbreviation
 // are all common, and every name they give is stored so their next links match without asking again.
 export function describeCredits(resolved) {

@@ -25,9 +25,9 @@
 const PROGRESS_BY_BLOCK = {
   tebp7htyvolml8wokttg66pw:   0, // choice input Yes, I want to become a member
   ofaqjfre4b6smht07inyag0w:   3, // choice input applicantPath
+  oxw82owm9r4i9d24eat8mgzs:   5, // choice input consent1
   flgpd2vixmu0djiomet77kmn:   6, // choice input EntityType
   ibbe01buu9psnjogoq0unpjw:   6, // choice input role
-  oxw82owm9r4i9d24eat8mgzs:   6, // choice input consent1
   qvo8thfagkj2mixdoj382da4:   7, // choice input role
   i1e0ui8ulp9upo2qo6n9hzx5:   8, // choice input consent2
   dha20qnmgdroevgtjahyvgq4:   9, // choice input consent1
@@ -45,8 +45,8 @@ const PROGRESS_BY_BLOCK = {
   ahyzplqvx3ui5juwrrox3ueu:  15, // choice input consent2
   m7scr3gzjgis8kiuex6gm13a:  16, // text input   email
   ma8vs3i9jlqtnxnwpu22jjt3:  16, // text input   email
+  paqezgvjit32irt79tl5pc38:  16, // text input   gst_no
   s1x2bk8lawg44n75cnhxqqz9:  16, // text input   email
-  paqezgvjit32irt79tl5pc38:  17, // text input   gst_no
   pz63sk8srnnwtctc4bg4sxto:  17, // text input   place_of_birth
   b7635myaqyeudck8wk20ml1l:  19, // text input   email
   oq9t8my7r1eosq7d5438g5x8:  19, // file input   MAA_Upload
@@ -60,104 +60,105 @@ const PROGRESS_BY_BLOCK = {
   vfvvwcz6g7ueiw2lhqnwvg9z:  22, // text input   place_of_birth
   fmxzyrlpsf9zjmk9exsi3ek3:  23, // text input   gst_no
   wo33kybz0dcp0hawk4f6yis7:  23, // file input   AuthorityLetter_Upload
-  dvj39jnp3mzfbl49k11837bx:  25, // text input   trc_no
+  dvj39jnp3mzfbl49k11837bx:  24, // text input   trc_no
   e5s5cxj9n6eh6ubaz573m0vx:  25, // file input   company_noc
   wddfpadpnsiw8fpc1w5z05n1:  25, // file input   letter
   a5aujns6i7dhbqklnl755gpv:  26, // choice input Yes
   vws1gmd9irrbu70mlxxcx3zi:  26, // choice input Yes
-  h0nif8vdjloh9eytol30imnc:  28, // choice input Yes
+  h0nif8vdjloh9eytol30imnc:  27, // choice input Yes
   rq2atmhhs9siv7psmxmg636n:  28, // file input   company_pan
   n2u940qt8ltxoltppyvmfxpn:  29, // choice input teritory
+  ks91rw3cq2xrxt1099yy2516:  30, // text input   assosiation_name
   ktd9g9e08s6uz1tddf0imyye:  30, // text input   gst_no
   epndixa98cgkdrjnul7he2xt:  31, // file input   Noc
-  ks91rw3cq2xrxt1099yy2516:  31, // text input   assosiation_name
   up4you8ef2sxppryl6ie6cp1:  31, // text input   designation
-  fibjujil57kdwaiex3vosqzm:  33, // choice input Yes, I’ll type it
+  fibjujil57kdwaiex3vosqzm:  32, // choice input Yes, I’ll type it
   oqg4nwlfseo7drc66aq10m9e:  33, // choice input Yes
   dwt2rzc2jk3wiehx901m0eu1:  34, // text input   MotherTounge
   edgjtvqj0i5qwjfv0r1zkedd:  34, // file input   photo
-  w9hjqpdkcyjqxdc64tv9u89g:  36, // text input   chanel_desc
+  w9hjqpdkcyjqxdc64tv9u89g:  35, // text input   chanel_desc
   dup21pngh3d0pai4oxxjcqzs:  37, // text input   assosiation_name
   xahqzzlwvjiv0rdk1ub30j8o:  37, // text input   MotherTounge
   memgr2g4fj0bth4czl4v3l0w:  38, // choice input Yes
-  ml1pehw1jjrzcbflrezsarl7:  39, // file input   company_photo
+  ml1pehw1jjrzcbflrezsarl7:  38, // file input   company_photo
   xo78fggijfbfefgqne6dcw6g:  40, // text input   trc_no
   g2c93kyw19nogtv0sjhpowuy:  41, // text input   assosiation_name
+  q18gas1hym790bfnrtp5mpcd:  41, // choice input address_proof_type_current
   q3xl3vlud9r71twny3xpj5uz:  41, // text input   MotherTounge
-  q18gas1hym790bfnrtp5mpcd:  42, // choice input address_proof_type_current
+  dpxeg6y2w8fof0r4ftp2ft53:  43, // text input   registered_address_type
   et7njpjjc6gwz95rmdcr30nt:  43, // file input   passport_indivisual
+  k125w7fe75aqhv7gthubusai:  43, // file input   registered_address
   cbeexxvp4afbdv21ch60conz:  44, // choice input Yes, I’ll type it
-  dpxeg6y2w8fof0r4ftp2ft53:  44, // text input   registered_address_type
   j40owea6u92m53dxgpnwace5:  44, // choice input Yes
-  k125w7fe75aqhv7gthubusai:  44, // file input   registered_address
+  cbmqojadjfm2jmbk9c17a59q:  46, // choice input Yes
   krk5m92ihv5kaildp8jajdxj:  46, // file input   TRC
-  cbmqojadjfm2jmbk9c17a59q:  47, // choice input Yes
   t9nsr5eogpk34tqtghgbotqu:  47, // text input   chanel_desc
   ni0xbtx0htpr10x1setrq4u3:  48, // choice input teritory
+  cyci95gi706rpw8tva4e3ouo:  49, // choice input address_proof_type_current
   pxkfaxu6vkui9uv1by5mgua9:  49, // choice input Yes
-  cyci95gi706rpw8tva4e3ouo:  50, // choice input address_proof_type_current
   tj7pvwqhic7u6rmq436bhtvf:  50, // file input   company_photo
+  bl3ree1x725036j6wax3uav7:  51, // file input   comm_address2
+  g5frg3j9pemyoidcvobsa2px:  51, // text input   comm_address2_type
   nyx2jmkbywlvf5ixvinjii2a:  51, // text input   assosiation_name
   o5n5chjkhwof7ytyks400haq:  52, // file input   Noc
-  bl3ree1x725036j6wax3uav7:  53, // file input   comm_address2
-  g5frg3j9pemyoidcvobsa2px:  53, // text input   comm_address2_type
   kg2i35l2491u5hopas7stdg4:  53, // choice input address_proof_type_current
+  lezz4jxutykbfoq2r3ae0jkq:  54, // choice input Yes
   z0kyyoqr5nez31rlfpk5ppdv:  54, // text input   nationality
-  lezz4jxutykbfoq2r3ae0jkq:  56, // choice input Yes
   vqwuvk0vnzab8eol51i86j64:  56, // file input   photo
   yvahr8qbkgfhfuonsrkr49mq:  56, // file input   registered_address
+  qx9rpzvntiprq90gx1np7bmj:  57, // choice input teritory
   w8beaa44i3s8v46gzwhkbgzz:  57, // choice input dual_nationality
-  qx9rpzvntiprq90gx1np7bmj:  58, // choice input teritory
+  a1b4f5e5unw1ithjp4r5siw5:  59, // file input   Noc
   ddk7tlmjhkvt3zktskzt9i9e:  59, // choice input Yes
   x1a4lvyxz085pfhyppef6wnc:  59, // file input   pan_card
   yoh1r11iqch1dipaar7r6pl1:  60, // file input   passbook
-  a1b4f5e5unw1ithjp4r5siw5:  61, // file input   Noc
+  wiccvvam9g4d7c8ary2kulhu:  62, // file input   passbook
   csntwzyr0k418idnaxk0ha45:  63, // choice input address_proof_type_permanent
   if0fvqm05icv3tuyc3xjc7dj:  63, // choice input address_proof_type_current
   nqyxmnuusz3bq26r0obbmfpl:  63, // file input   passbook
-  wiccvvam9g4d7c8ary2kulhu:  64, // file input   passbook
+  gazeo8w40fwvbhuj5a06ftp6:  65, // file input   entity_incorporation_upload
   xqu8sijb9p92shdewvy5qumj:  66, // text input   P_address
   ybcl5sixj22vlhc8llzu49kl:  66, // file input   comm_address
   zr5z6lvgo3tmjkktva9oc2ql:  66, // file input   permanent_address_proof
-  gazeo8w40fwvbhuj5a06ftp6:  67, // file input   entity_incorporation_upload
   rpij8g7ou2lertf1xe46bwnc:  67, // choice input address_proof_type_permanent
+  vt6oqxd2g7pvbcxegcfbq2vk:  68, // file input   trc_upload
   ctpx2z89l8pqltt5ehahmq3a:  69, // choice input Yes
-  vt6oqxd2g7pvbcxegcfbq2vk:  69, // file input   trc_upload
   xwnj50axf9xtvy10ljg1eaie:  69, // choice input Yes
   dqphd61tvxp3p2l7jkbyqceh:  70, // file input   permanent_address_proof
+  o7abkrvjgi0m9p8i0q5qhfob:  70, // file input   tin_upload
   inks0tdl2dbonehscrbhbfqr:  71, // choice input address_proof_type_current
   it7obzdjqi9i5kqsbxz3tffm:  72, // choice input teritory
-  o7abkrvjgi0m9p8i0q5qhfob:  72, // file input   tin_upload
+  jl6epop3i1iaiwhib5xr5d8d:  73, // file input   SS_NumberUpload
   i8v9h0dszpnwphwwl2mxf6te:  74, // choice input Yes
   vhickdt8h7avyu2g85e2uooh:  74, // text input   c_address
   vn7pcvzfjzr8xmrkjx9tzwai:  74, // file input   current_address_proof
-  jl6epop3i1iaiwhib5xr5d8d:  75, // file input   SS_NumberUpload
   s2g4n58d2ogyr9wp04242yka:  75, // file input   Noc
+  ofbhr8kfld8x54f5601rb283:  76, // file input   PEC_Upload
   iyo96vyr3j95r4qvzw342uhc:  77, // file input   tin_upload
   k05fwzssw7yfyu41xik34ast:  78, // file input   passbook
-  ofbhr8kfld8x54f5601rb283:  78, // file input   PEC_Upload
+  kz2xvxsybq3whe6rh01bjqwf:  78, // choice input address_proof_type_current
   tk1kdh0b1j6uzvacoo34rp1i:  78, // choice input address_proof_type_current
   vsg89mcrd3pam5m7frypfh0n:  80, // file input   selfDecleration_upload
+  bg3vzcmdf25l481nt8dwi80r:  81, // file input   comm_address
   jepno1g51m3s76v79kmyukj1:  81, // file input   current_address_proof
-  kz2xvxsybq3whe6rh01bjqwf:  81, // choice input address_proof_type_current
   mtj6wazphq42jv0oadtnlozs:  81, // choice input Yes, I’ll upload it
-  bg3vzcmdf25l481nt8dwi80r:  83, // file input   comm_address
   o30tr1wttrzh7tc1a7e6gkw2:  83, // file input   SS_NumberUpload
+  e6n9bs69j5r8vejql1qb9yhd:  84, // file input   Form41_upload
   p5efmf064weo8nardhmx9buy:  84, // file input   gst_certificate_upload
   qje5cvxfiyeyulko9vb54wqb:  85, // choice input Yes, I have an alias/stage name
   dpu1p9v8ysxhkddq2fm73esb:  86, // file input   Form41_upload
-  e6n9bs69j5r8vejql1qb9yhd:  86, // file input   Form41_upload
+  vbib8eovbot8wizsq2ixu9ie:  86, // file input   letter
   mpja7mu3exf9537puaxmjjn1:  88, // choice input Yes, I have an alias/stage name
   abpyq4uj0w5512l0clblw6zx:  89, // text input   stageName
+  csojtpa7m2n22t5qe62bf6b4:  89, // choice input Yes, I have an alias/stage name
   n2pckdbd7ikeetef0k37e9i3:  89, // choice input Yes, I have an alias/stage name
-  vbib8eovbot8wizsq2ixu9ie:  89, // file input   letter
   k1pcwt23nmp7s2m9517t2y8b:  91, // text input   traderName
   xp4ynnlivpqzok1byzpgeo8p:  91, // text input   stageName
   xgpnjbhvc7ku42ks8asqyhd4:  92, // text input   traderName
   t7rxqa45lzxn3c20au3xczjd:  93, // url input    workUrl
-  s3ve6kasl1rkiun2n9fgtjxu:  94, // url input    workUrl
   uycu77l5avn789uonzyw4nd1:  94, // url input    workUrl
   xnbvoocex284qeg48jbi6ufr:  94, // url input    workUrl
+  s3ve6kasl1rkiun2n9fgtjxu:  95, // url input    workUrl
   ufpca0wnuwznk2ks7qbv39py:  96, // choice input Pay Application Fee
   mqd5zfukd99nkczylu206jo1:  97, // choice input Pay Application Fee
   o6vjstq2do6uuy67wfbzg451:  97, // choice input Pay Application Fee
