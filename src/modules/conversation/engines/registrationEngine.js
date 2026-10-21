@@ -23,6 +23,7 @@ import {
   confirmsSong,
   wantsAnotherLink,
   isMoveOnKeyword,
+  describeSavedSong,
   describeSong,
   describeCredits,
   MAX_WORK_LINKS,
@@ -584,6 +585,51 @@ async function withExtractedDetails(transcript, userId) {
   return out;
 }
 
+/**
+ * Put the saved details of each song back under the link the member pasted.
+ *
+ * After "Yes, that's my song" the engine asks the missing Film/Album, Publisher, category,
+ * language and year itself, with questions Typebot has never heard of - so neither those
+ * questions nor the answers are journalled and a replay draws the link and nothing after it.
+ * The answers are on App_Accounts_WorkRegistration, so one card per song stands in for them.
+ *
+ * Best effort, like withExtractedDetails: a failed lookup leaves the transcript as it was.
+ */
+async function withSongDetails(transcript, userId) {
+  if (!Array.isArray(transcript) || !transcript.length) return transcript;
+
+  let rows = [];
+  try {
+    rows = await workLinkService.getWorkLinks(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read saved songs while rebuilding the resumed transcript');
+    return transcript;
+  }
+
+  const cards = new Map(); // DigitalLink -> card
+  for (const row of rows) {
+    const text = describeSavedSong(row);
+    if (text && row.DigitalLink) cards.set(row.DigitalLink, { sender: 'bot', ...textMessage(`song-details-${row.WorkNotificationId}`, text) });
+  }
+  if (!cards.size) return transcript;
+
+  const out = [];
+  let lastLinkAt = -1;
+  for (const entry of transcript) {
+    out.push(entry);
+    const card = entry?.sender === 'user' ? cards.get(String(entry.answer ?? '').trim()) : null;
+    if (card) {
+      out.push(card);
+      cards.delete(String(entry.answer).trim());
+      lastLinkAt = out.length - 1;
+    }
+  }
+  // A song whose link turn is not in the transcript (an extra slot filled in the backend's own
+  // loop) still gets its card, after the last link the member did paste.
+  if (cards.size && lastLinkAt >= 0) out.splice(lastLinkAt + 1, 0, ...cards.values());
+  return out;
+}
+
 async function resumeFromJournal({ userId, token }) {
   const turns = await conversationJournalService.loadJournal(userId);
   const startResponse = await typebotClient.startChat({
@@ -654,14 +700,14 @@ async function resumeFromJournal({ userId, token }) {
       userId,
       messages: resumedMessages,
       input: response.input,
-      extra: { history: await withExtractedDetails(transcript, userId) },
+      extra: { history: await withExtractedDetails(await withSongDetails(transcript, userId), userId) },
     });
     if (withReview) return withReview;
   }
 
   return {
     sessionEnded: false,
-    history: await withExtractedDetails(transcript, userId),
+    history: await withExtractedDetails(await withSongDetails(transcript, userId), userId),
     messages: resumedMessages,
     input: response.input,
     progress: resolveProgress(response.input.id),
