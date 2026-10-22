@@ -289,11 +289,14 @@ function buildOcrConfirmationMessages(docType, extracted) {
   ];
 }
 
+// The label of the confirm button, also what a replayed chat shows as the member's answer.
+const OCR_CONFIRM_YES = 'Yes, confirm';
+
 const OCR_CONFIRM_CHOICE_INPUT = {
   id: 'ocr-confirmation',
   type: 'choice input',
   items: [
-    { id: 'ocr-confirm-yes', content: 'Yes, confirm' },
+    { id: 'ocr-confirm-yes', content: OCR_CONFIRM_YES },
     { id: 'ocr-confirm-no', content: 'No, re-upload' },
   ],
 };
@@ -568,9 +571,12 @@ async function withExtractedDetails(transcript, userId) {
     // reader's types, so the caption found no labels and the card came back blank.
     // The reader puts its own type in the result; that is what to look the labels up by.
     const ocrType = extracted?.documentType ?? doc.DocumentName;
-    // Only the two information bubbles - the "Is this correct?" prompt belongs to a
-    // question the member already answered, and asking it again would be a lie.
-    const [intro, values] = buildOcrConfirmationMessages(ocrType, extracted);
+    // The whole exchange as the member lived it: the card, the "Is this correct?" question and
+    // their "Yes". A document only has OcrExtract once it was confirmed (confirmDocument writes it
+    // on "Yes, confirm"; a rejected upload saves nothing), so the answer is known to have been yes.
+    // Without the last two bubbles a resumed or language-switched chat shows the card and then
+    // jumps on, as if the member had never answered it.
+    const [intro, values, prompt] = buildOcrConfirmationMessages(ocrType, extracted);
     // A type with no labels, or one whose every field came back empty, yields a bubble
     // holding an empty string - which still has a richText node, so length alone never
     // caught it. Check for actual text.
@@ -578,7 +584,12 @@ async function withExtractedDetails(transcript, userId) {
       (node?.children ?? []).some((child) => typeof child?.text === 'string' && child.text.trim()),
     );
     if (hasValues) {
-      out.push({ sender: 'bot', ...intro }, { sender: 'bot', ...values });
+      out.push(
+        { sender: 'bot', ...intro },
+        { sender: 'bot', ...values },
+        { sender: 'bot', ...prompt },
+        { sender: 'user', id: `replay-ocr-confirm-${doc.DocumentCaption}`, answer: OCR_CONFIRM_YES },
+      );
     } else {
       logger.warn({ userId, caption: doc.DocumentName, ocrType }, 'No OCR labels for this document - card skipped');
     }
