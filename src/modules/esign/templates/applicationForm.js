@@ -220,6 +220,16 @@ function worksTable(data) {
   return `<table class="works"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// A second signature spot above the signer's name on the Work Notification page, for DocuSign only.
+// DocuSign puts a Sign Here tab on EVERY occurrence of the anchor text, so repeating the same
+// invisible text here is all it needs - and the slot sits in the normal flow, so the tab follows the
+// signer block wherever the works table pushes it. eMudhra places its one signature by coordinates on
+// page 3 and never sees this slot (Indian members do not get it).
+function workPageSignatureSlot(data) {
+  if (!data.signing.workPageSignature) return '';
+  return `<div class="sign-slot"><span class="anchor">${SIGNATURE_BOX.anchorText}</span></div>`;
+}
+
 function worksPage(data) {
   return `
     <section class="page">
@@ -237,7 +247,7 @@ function worksPage(data) {
       </div>
       <div class="sign-row">
         <div><p>Date: ${e(data.signing.date)}</p></div>
-        <div class="sign-meta"><p class="strong">${e(data.signing.signerName)}</p>${signingDetails(data)}</div>
+        <div class="sign-meta">${workPageSignatureSlot(data)}<p class="strong">${e(data.signing.signerName)}</p>${signingDetails(data)}</div>
       </div>
     </section>`;
 }
@@ -287,7 +297,8 @@ const STYLES = `
   .sign-row { display: flex; justify-content: space-between; margin-top: 3mm; line-height: 1.8; }
   .sign-meta { text-align: right; }
   .sign-box { position: absolute; top: ${SIGN_BOX_MM.top}mm; left: ${SIGN_BOX_MM.left}mm; width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height}mm; }
-  .sign-box .anchor { color: #fff; font-size: 1pt; }
+  .sign-box .anchor, .sign-slot .anchor { color: #fff; font-size: 1pt; }
+  .sign-slot { width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height}mm; margin-left: auto; text-align: left; }
   .date-place { position: absolute; top: ${SIGN_BOX_MM.top + 2}mm; left: 0; line-height: 1.8; }
   .sign-meta.under-box { position: absolute; top: ${SIGN_BOX_MM.top + SIGN_BOX_MM.height + 2}mm; right: 0; line-height: 1.8; }
   .approval { position: absolute; top: 205mm; left: 0; right: 0; text-align: center; font-weight: bold; }
