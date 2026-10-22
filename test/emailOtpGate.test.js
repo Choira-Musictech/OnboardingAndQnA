@@ -236,3 +236,91 @@ test('a correct address on the first try still verifies in one pass', async (t) 
   assert.equal(mailedTo.length, 1, 'exactly one code was sent');
   assert.equal(typebotSessionStore.get(userId)?.emailChanges ?? 0, 0, 'no change was counted');
 });
+
+// --- a refresh in the middle of the OTP step --------------------------------
+//
+// A refresh sends an empty start call, which throws the stored session away - and with it "a code is
+// on its way to this address". Resend OTP then reached the email gate as if it were an address and was
+// refused as "not a valid email". The OTP step now comes back with the resumed chat.
+
+const texts = (res) =>
+  (res.messages ?? []).map((m) => m.content?.richText?.[0]?.children?.[0]?.text ?? '').join(' || ');
+
+// Journal one answered question and make the replay land on `landsOn`.
+async function refreshInto(t, userId, landsOn) {
+  const { conversationJournalService } = await import('../src/modules/conversation/services/conversationJournal.service.js');
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'answer-b1' });
+
+  const real = { start: typebotClient.startChat, cont: typebotClient.continueChat };
+  typebotClient.startChat = async () => ({ sessionId: 'resume-session', messages: [], input: { id: 'b1' } });
+  // The replay lands on `landsOn`; anything the member answers afterwards moves on as usual.
+  let replayed = false;
+  typebotClient.continueChat = async () => {
+    const input = replayed ? { id: 'next-block', type: 'text input', options: {} } : landsOn;
+    replayed = true;
+    return { messages: [], input };
+  };
+  t.after(() => {
+    typebotClient.startChat = real.start;
+    typebotClient.continueChat = real.cont;
+  });
+
+  const offer = await say(userId, undefined);
+  assert.equal(offer.input?.id, 'resume-registration', 'a refresh offers to resume');
+  return say(userId, 'Continue where I left off');
+}
+
+test('after a refresh the OTP step comes back, and Resend OTP sends a new code to the same address', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  await say(userId, 'member@example.invalid');
+
+  const resumed = await refreshInto(t, userId, EMAIL_INPUT);
+  assert.equal(resumed.input?.id, 'email-otp-verification', 'the OTP step, not the bare email question');
+  assert.match(texts(resumed), /member@example\.invalid/);
+
+  mailedTo.length = 0;
+  const resent = await say(userId, 'Resend OTP');
+  assert.deepEqual(mailedTo, ['member@example.invalid'], 'a new code goes to the address already entered');
+  assert.equal(resent.input?.id, 'email-otp-verification');
+  assert.doesNotMatch(texts(resent), /valid email/i);
+
+  const done = await say(userId, CORRECT_OTP);
+  assert.equal(done.input?.id, 'next-block', 'the code still verifies after the refresh');
+});
+
+test('a refresh keeps the count of changed addresses', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  await say(userId, 'one@example.invalid');
+  await say(userId, 'change'); // 1
+  await say(userId, 'two@example.invalid');
+
+  await refreshInto(t, userId, EMAIL_INPUT);
+  assert.equal(typebotSessionStore.get(userId)?.emailChanges, 1);
+});
+
+test('a refresh that lands on another question does not bring the OTP step back', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  await say(userId, 'member@example.invalid');
+
+  const resumed = await refreshInto(t, userId, { id: 'other-block', type: 'text input', options: {} });
+  assert.equal(resumed.input?.id, 'other-block');
+  assert.equal(typebotSessionStore.get(userId)?.pendingEmailVerification, undefined);
+});
+
+test('Resend OTP with no code on its way asks for the address instead of calling it invalid', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  // e.g. the server restarted: the session is back on the plain email question and remembers nothing.
+  const { userId } = await startAtEmailStep();
+  mailedTo.length = 0;
+
+  for (const button of ['Resend OTP', 'Change email']) {
+    const res = await say(userId, button);
+    assert.equal(res.input?.id, 'email-block', 'still on the email question');
+    assert.match(texts(res), /enter your email address again/i);
+    assert.doesNotMatch(texts(res), /valid email/i);
+  }
+  assert.equal(mailedTo.length, 0, 'nothing is mailed for a button tap');
+});

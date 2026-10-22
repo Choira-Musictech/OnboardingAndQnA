@@ -59,6 +59,12 @@ export function describeOtpSent(email) {
   return `We've sent a 4-digit OTP to ${email}. Enter it to verify, or tap Resend OTP for a new code, or Change email to use a different address.`;
 }
 
+// "Resend OTP" / "Change email" arrived but there is no code on its way any more (the session was
+// lost, e.g. a refresh or a server restart). They are buttons, not addresses - ask for the address.
+export function describeEmailNeededAgain() {
+  return 'Please enter your email address again and we will send you a new OTP.';
+}
+
 export function describeOtpProblem(reason) {
   return `${reason} Tap Resend OTP for a new code, or Change email to use a different address.`;
 }

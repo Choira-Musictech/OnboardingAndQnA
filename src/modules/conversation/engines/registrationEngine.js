@@ -69,6 +69,7 @@ import {
   isChangeEmailKeyword,
   sendVerificationOtp,
   verifyVerificationOtp,
+  describeEmailNeededAgain,
   describeOtpSent,
   describeOtpProblem,
   describeChangeLimitReached,
@@ -483,7 +484,7 @@ async function saveAndOfferAnother({ userId, existing, resolved, note }) {
 // Returns a reply offering to resume, or null when there is nothing to resume and the caller should
 // just start a normal chat. Never throws: if the journal can't be read, a first-question start is a
 // worse experience but still a working one.
-async function offerResume(userId) {
+async function offerResume(userId, carried = null) {
   let turns = 0;
   let lastBlock = null;
   try {
@@ -495,7 +496,7 @@ async function offerResume(userId) {
     return null;
   }
 
-  typebotSessionStore.set(userId, { pendingResumeChoice: true });
+  typebotSessionStore.set(userId, { pendingResumeChoice: true, ...(carried ? { carriedEmailVerification: carried } : {}) });
 
   return {
     sessionEnded: false,
@@ -630,7 +631,15 @@ async function withSongDetails(transcript, userId) {
   return out;
 }
 
-async function resumeFromJournal({ userId, token }) {
+// A refresh throws the stored session away (see the stale-session discard in handle()), and with it
+// the "we sent an OTP to this address" state of the email step. This is what survives: the address
+// and how many times it was changed, so the resumed chat can offer the same OTP step again.
+function carriedEmailVerification(session) {
+  if (!session?.pendingEmailVerification?.email) return null;
+  return { pendingEmailVerification: session.pendingEmailVerification, emailChanges: session.emailChanges ?? 0 };
+}
+
+async function resumeFromJournal({ userId, token, carried = null }) {
   const turns = await conversationJournalService.loadJournal(userId);
   const startResponse = await typebotClient.startChat({
     prefilledVariables: { token, registrationId: userId },
@@ -694,6 +703,28 @@ async function resumeFromJournal({ userId, token }) {
     ...(response.messages ?? []),
   ];
 
+  // Resumed onto the email question the member had already answered, with a code on its way: put the
+  // OTP step back - otherwise "Resend OTP" would reach the email gate as if it were an address.
+  if (carried && isEmailStep(response.input.options?.variableId)) {
+    const { email } = carried.pendingEmailVerification;
+    typebotSessionStore.set(userId, {
+      sessionId: startResponse.sessionId,
+      input: response.input,
+      pendingEmailVerification: carried.pendingEmailVerification,
+      emailChanges: carried.emailChanges,
+    });
+    return {
+      sessionEnded: false,
+      history: await withExtractedDetails(await withSongDetails(transcript, userId), userId),
+      messages: [
+        ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
+        textMessage('email-otp-sent', describeOtpSent(email)),
+      ],
+      input: EMAIL_OTP_INPUT,
+      progress: resolveProgress(response.input.id),
+    };
+  }
+
   // Resumed onto the payment step: the review and the signing/payment notices belong here too.
   if (isPaymentStep(response.input.id)) {
     const withReview = await withPaymentReview({
@@ -751,7 +782,7 @@ async function withPaymentReview({ userId, messages, input, extra = {} }) {
 // needs no resume decision either.
 async function relocalizeCurrentStep({ userId, token, existing }) {
   // Still looking at the offer itself: show it again rather than answering it on their behalf.
-  if (existing?.pendingResumeChoice) return offerResume(userId);
+  if (existing?.pendingResumeChoice) return offerResume(userId, existing.carriedEmailVerification ?? null);
 
   let turns = 0;
   try {
@@ -762,7 +793,7 @@ async function relocalizeCurrentStep({ userId, token, existing }) {
   }
   if (turns === 0) return null;
 
-  return resumeFromJournal({ userId, token });
+  return resumeFromJournal({ userId, token, carried: carriedEmailVerification(existing) });
 }
 
 /**
@@ -808,6 +839,7 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     if (sameStep) return sameStep;
   }
 
+  let carried = null; // the email OTP step of a session discarded below - see resumeFromJournal
   let bypassEmailGate = false;
   let bypassWorkLinkSave = false;
   // Something to tell the member about their work link while the conversation moves past the step -
@@ -822,6 +854,9 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // so treat it as intent to start over rather than failing with
   // "Invalid message" against a question the caller doesn't know about.
   if (existing && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
+    // The OTP state is the one thing worth keeping from it: a refresh in the middle of the email
+    // step must not turn "Resend OTP" into an invalid email address.
+    carried = carriedEmailVerification(existing) ?? existing.carriedEmailVerification ?? null;
     logger.warn({ userId }, 'Discarding stale conversation session on empty start call');
     typebotSessionStore.clear(userId);
     existing = null;
@@ -835,7 +870,7 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     // one that must never be reached by accident.
     // A member who has signed is never restarted either: their details are confirmed.
     if (!choosesRestart(message) || (await isApplicationSigned(userId))) {
-      return resumeFromJournal({ userId, token });
+      return resumeFromJournal({ userId, token, carried: existing.carriedEmailVerification ?? null });
     }
 
     // The journal has to go with it, or the next empty start call offers to resume the registration
@@ -862,11 +897,11 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // an unfinished registration. Offer the choice before starting a chat, so "start over" doesn't
   // burn a Typebot session we'd immediately throw away.
   if (!existing && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
-    const offer = await offerResume(userId);
+    const offer = await offerResume(userId, carried);
     if (offer) {
       // Signed = confirmed: no "start over" for them, carry straight on (resumeFromJournal replaces
       // the pending-choice session offerResume just stored).
-      if (await isApplicationSigned(userId)) return resumeFromJournal({ userId, token });
+      if (await isApplicationSigned(userId)) return resumeFromJournal({ userId, token, carried });
       return offer;
     }
   }
@@ -1431,6 +1466,15 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // replay (bypassEmailGate) so a just-verified email doesn't re-trigger
   // a fresh OTP send.
   if (!bypassEmailGate && existing?.input && message && isEmailStep(existing.input.options?.variableId)) {
+    if (isResendKeyword(message) || isChangeEmailKeyword(message)) {
+      return {
+        sessionEnded: false,
+        messages: [textMessage('email-needed-again', describeEmailNeededAgain())],
+        input: existing.input,
+        progress: resolveProgress(existing.input.id),
+      };
+    }
+
     if (!isValidEmail(message)) {
       return {
         sessionEnded: false,
