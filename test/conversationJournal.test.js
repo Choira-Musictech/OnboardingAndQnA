@@ -545,6 +545,46 @@ test('a resumed chat replays why a document was rejected', async (t) => {
   assert.match(upload.attachedFileUrls[0], /\/documents\/1\/pan\.jpg\?e=\d+&t=/);
 });
 
+// The member's "Yes" to "Is this correct?" is answered by the engine, not Typebot, so it never
+// reaches the journal. Rebuilt with the card it belongs to, so a resumed or language-switched chat
+// still shows what they answered.
+test('a resumed chat keeps the "Yes" the member gave to the extracted details', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  const documentUrl = 'https://s3.us-east-1.amazonaws.com/product008/public/pan.jpg';
+  await conversationJournalService.recordTurn({
+    userId,
+    blockId: 'b1',
+    answer: 'pan.jpg',
+    attachedFileUrls: [documentUrl],
+  });
+
+  const realDocs = registrationRepository.findDocumentsByAccountId;
+  registrationRepository.findDocumentsByAccountId = async () => [
+    {
+      AccountDocId: 1n,
+      DocumentName: 'PAN',
+      DocumentCaption: documentUrl,
+      OcrExtract: JSON.stringify({ documentType: 'PAN', pan: 'ABCDE1234F', name: 'ASHA RAO' }),
+    },
+  ];
+  t.after(() => {
+    registrationRepository.findDocumentsByAccountId = realDocs;
+  });
+
+  const restoreClient = stubReplay(['b1', 'b2']);
+  t.after(restoreClient);
+
+  await handle({ userId, token: 't' });
+  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+
+  const history = resumed.history ?? [];
+  const at = history.findIndex((e) => e.id === 'ocr-confirmation-prompt');
+  assert.ok(at > 0, 'the "Is this correct?" question is replayed');
+  assert.equal(history[at + 1].sender, 'user');
+  assert.equal(history[at + 1].answer, 'Yes, confirm');
+});
+
 // Resuming onto the payment step must show the same review + signing notices the live relay does.
 for (const { signed, expectNotice, expectSignRequired } of [
   { signed: false, expectNotice: /Please sign your application before payment/, expectSignRequired: true },
