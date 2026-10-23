@@ -266,6 +266,8 @@ async function getIdentityNames(userId) {
     // Lyricist/Composer/Both - which of the song's role-labelled credit lists matchCredits()
     // must check the member's name against (see workMatch.service.js).
     roleLabels: listRoleLabels(account.RollTypeIds),
+    // Owner/Publisher members (a company) are matched on the song's publisher, not on writer credits.
+    isPublisher: listRoleLabels(account.RollTypeIds).includes('Publisher'),
   };
 }
 

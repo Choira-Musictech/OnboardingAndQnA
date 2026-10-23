@@ -26,10 +26,14 @@ import {
   describeSavedSong,
   describeSong,
   describeCredits,
+  describePublisherAsk,
+  describePublisherMismatch,
+  describePublisherRetry,
   MAX_WORK_LINKS,
   MAX_ALIAS_ATTEMPTS,
   WORK_LINK_CONFIRM_INPUT,
   WORK_LINK_ALIAS_INPUT,
+  WORK_LINK_PUBLISHER_INPUT,
   WORK_LINK_MORE_INPUT,
 } from '../services/typebot/workLinkGate.js';
 import {
@@ -41,7 +45,7 @@ import {
 } from '../services/typebot/workDetailsGate.js';
 import { workLinkService } from '../../work/services/workLink.service.js';
 import { resolveWorkLink } from '../../work/services/workLinkResolver.service.js';
-import { matchCredits } from '../../work/services/workMatch.service.js';
+import { matchCredits, matchPublisher } from '../../work/services/workMatch.service.js';
 import {
   isPaymentStep,
   describeReview,
@@ -345,6 +349,24 @@ function describeResumeOffer(percent) {
 // Everything already saved is untouched; they just re-answer from the point the flow diverged.
 function describeResumedPartially() {
   return "We've restored as much of your earlier registration as we could. Some questions have changed since you were last here, so we'll need a few answers again from this point.";
+}
+
+// An Owner/Publisher member's company does not match the song's publisher: ask for the trader name
+// the publisher is credited under, the way a writer is asked for the name they are credited under. It
+// goes through the same alias step (stored as a claimed name, bounded by MAX_ALIAS_ATTEMPTS).
+function askForTraderName(userId, existing, resolved, publisher) {
+  typebotSessionStore.set(userId, {
+    sessionId: existing.sessionId,
+    input: existing.input,
+    pendingWorkLinkAlias: { resolved: { ...resolved, publisher }, attempts: 0 },
+  });
+
+  return {
+    sessionEnded: false,
+    messages: [textMessage('work-link-publisher-mismatch', describePublisherMismatch(publisher))],
+    input: WORK_LINK_ALIAS_INPUT,
+    progress: resolveProgress(existing.input.id),
+  };
 }
 
 // Hold the conversation on the work-link step and ask again. Typebot is never advanced, so the
@@ -1147,8 +1169,32 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
 
     // Names already on file: the identity-document name and the registration stage name are
     // evidence; aliases the member gave at this step on an earlier song are only their own claim.
-    const { trusted, claimed, roleLabels } = await registrationService.getIdentityNames(userId);
-    const { matched } = matchCredits(resolved, trusted, claimed, roleLabels);
+    const { trusted, claimed, roleLabels, isPublisher } = await registrationService.getIdentityNames(userId);
+
+    // An Owner/Publisher member is a company: there is no author/composer credit to find, so the
+    // company (official name + trader name) is matched against the song's publisher instead. A song
+    // that names none is asked about, and the answer is what the company is matched against.
+    let matched;
+    if (isPublisher) {
+      const publisher = String(resolved.publisher ?? '').trim();
+      if (!publisher) {
+        typebotSessionStore.set(userId, {
+          sessionId: existing.sessionId,
+          input: existing.input,
+          pendingWorkLinkPublisher: { resolved },
+        });
+        return {
+          sessionEnded: false,
+          messages: [textMessage('work-link-publisher-ask', describePublisherAsk())],
+          input: WORK_LINK_PUBLISHER_INPUT,
+          progress: resolveProgress(existing.input.id),
+        };
+      }
+      ({ matched } = matchPublisher(publisher, trusted, claimed));
+      if (!matched) return askForTraderName(userId, existing, resolved, publisher);
+    } else {
+      ({ matched } = matchCredits(resolved, trusted, claimed, roleLabels));
+    }
 
     if (!matched) {
       // Not in the credits. The usual reason is a stage name we don't have on file rather than a
@@ -1177,6 +1223,28 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     message = resolved.url;
   }
 
+  // Resolve a pending "who is the publisher of this song?" answer (Owner/Publisher members, for a song
+  // whose own data names no publisher). What they say becomes the song's publisher - saved on its row,
+  // so the per-song Publisher question is not asked again - and is what the company is matched against.
+  if (existing?.pendingWorkLinkPublisher && message !== undefined) {
+    const { resolved } = existing.pendingWorkLinkPublisher;
+    typebotSessionStore.set(userId, { sessionId: existing.sessionId, input: existing.input });
+    existing = typebotSessionStore.get(userId);
+
+    const withPublisher = { ...resolved, publisher: String(message).trim() };
+    const { trusted, claimed } = await registrationService.getIdentityNames(userId);
+
+    if (!matchPublisher(withPublisher.publisher, trusted, claimed).matched) {
+      return askForTraderName(userId, existing, withPublisher, withPublisher.publisher);
+    }
+
+    const outcome = await saveAndOfferAnother({ userId, existing, resolved: withPublisher });
+    if (!outcome.advance) return outcome;
+    workLinkNotice = outcome.notice;
+    bypassWorkLinkSave = true;
+    message = withPublisher.url;
+  }
+
   // Resolve a pending "what name are you credited under?" answer.
   if (existing?.pendingWorkLinkAlias && message !== undefined) {
     const { resolved, attempts } = existing.pendingWorkLinkAlias;
@@ -1196,8 +1264,11 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
       });
     }
 
-    const { roleLabels } = await registrationService.getIdentityNames(userId);
-    const { matched } = matchCredits(resolved, [], names, roleLabels);
+    const { roleLabels, isPublisher } = await registrationService.getIdentityNames(userId);
+    // A company's trader name is matched against the song's publisher, a writer's against its credits.
+    const { matched } = isPublisher
+      ? matchPublisher(resolved.publisher, [], names)
+      : matchCredits(resolved, [], names, roleLabels);
 
     if (!matched && attempts + 1 < MAX_ALIAS_ATTEMPTS) {
       typebotSessionStore.set(userId, {
@@ -1211,7 +1282,9 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
         messages: [
           textMessage(
             'work-link-alias-retry',
-            "That name isn't in the credits either. Please check how your name appears on the release and enter it exactly.",
+            isPublisher
+              ? describePublisherRetry(resolved.publisher)
+              : "That name isn't in the credits either. Please check how your name appears on the release and enter it exactly.",
           ),
         ],
         input: WORK_LINK_ALIAS_INPUT,

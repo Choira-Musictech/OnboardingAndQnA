@@ -206,4 +206,63 @@ export function matchCredits(resolved, trustedNames, claimedNames = [], roles = 
   return { matched: false, trust: MATCH_TRUST.NONE, matchedName: null, matchedCredit: null };
 }
 
-export const workMatchService = { matchCredits, MATCH_TRUST };
+// --- Publisher members ------------------------------------------------------
+//
+// An Owner/Publisher member is a company, not a writer: there is no "author or composer" role to
+// look for in the credits. What identifies them on a song is its PUBLISHER (the label), so the
+// company is matched against that - by its official name (AccountName) and its trader name (the
+// flow's own traderName answer), both on file before the member saw the song. A trader name the
+// member adds later at the work-link step is only a claim, exactly as for writers.
+//
+// Company names are not person names. "T-Series" and "Super Cassettes Industries Pvt Ltd" are one
+// thing to the member and nothing alike to a string comparison, and "XYZ Music Pvt Ltd" /
+// "XYZ Music Private Limited" are the same company spelt two ways. So legal-form and generic words
+// are dropped and what is left must line up: equal, or one side's words all appear in the other's
+// ("T Series" ~ "T-Series Music Pvt Ltd"). At least one distinctive word is required - a bare
+// "Music Pvt Ltd" says nothing and matches nothing.
+const GENERIC_COMPANY_WORDS = new Set([
+  'pvt', 'private', 'ltd', 'limited', 'llp', 'llc', 'inc', 'incorporated', 'corp', 'corporation', 'co', 'company',
+  'the', 'and', 'of',
+  'music', 'musics', 'records', 'record', 'entertainment', 'entertainments', 'films', 'film', 'pictures',
+  'productions', 'production', 'studios', 'studio', 'media', 'cassettes', 'audio', 'label', 'labels',
+]);
+
+function companyWords(value) {
+  return normalizeName(value)
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((word) => word && !GENERIC_COMPANY_WORDS.has(word));
+}
+
+function companyNamesMatch(candidate, publisher) {
+  const mine = companyWords(candidate);
+  const theirs = companyWords(publisher);
+  if (mine.length === 0 || theirs.length === 0) return false;
+
+  const [smaller, larger] = mine.length <= theirs.length ? [mine, theirs] : [theirs, mine];
+  return smaller.every((word) => larger.includes(word));
+}
+
+// matchPublisher(publisher, trustedNames, claimedNames) -> same shape as matchCredits.
+//   publisher: the song's publisher/label, as a string (or a list of them).
+export function matchPublisher(publisher, trustedNames, claimedNames = []) {
+  const publishers = (Array.isArray(publisher) ? publisher : [publisher]).filter((p) => typeof p === 'string' && p.trim());
+
+  function tryNames(names) {
+    for (const candidate of (Array.isArray(names) ? names : [names]).filter((n) => companyWords(n).length > 0)) {
+      const credit = publishers.find((p) => companyNamesMatch(candidate, p));
+      if (credit) return { matchedName: candidate, matchedCredit: credit };
+    }
+    return null;
+  }
+
+  const trusted = tryNames(trustedNames);
+  if (trusted) return { matched: true, trust: MATCH_TRUST.TRUSTED, ...trusted };
+
+  const claimed = tryNames(claimedNames);
+  if (claimed) return { matched: true, trust: MATCH_TRUST.CLAIMED, ...claimed };
+
+  return { matched: false, trust: MATCH_TRUST.NONE, matchedName: null, matchedCredit: null };
+}
+
+export const workMatchService = { matchCredits, matchPublisher, MATCH_TRUST };
