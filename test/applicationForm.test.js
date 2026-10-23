@@ -211,6 +211,8 @@ test('an NRI form has the signature anchor on the declaration page and again abo
     assert.equal(anchorsIn(html), 2, regType);
     // The second one belongs to PART 7's signer block, not the declaration.
     assert.ok(html.indexOf('PART 7') < html.lastIndexOf(`<span class="anchor">${SIGNATURE_BOX.anchorText}</span>`), regType);
+    // The DocuSign stamp prints the signer's name, so the typed name is not repeated beside it.
+    assert.equal(html.slice(html.indexOf('PART 7')).includes(`<p class="strong">${data.signing.signerName}</p>`), false, regType);
   }
 });
 
@@ -219,6 +221,8 @@ test('an Indian form keeps its single signature anchor, so eMudhra signing is un
     account = { ...INDIVIDUAL, AccountRegType: regType };
     const data = await build();
     assert.equal(data.signing.workPageSignature, false, regType);
-    assert.equal(anchorsIn(renderApplicationForm(data)), 1, regType);
+    const html = renderApplicationForm(data);
+    assert.equal(anchorsIn(html), 1, regType);
+    assert.ok(html.slice(html.indexOf('PART 7')).includes(`<p class="strong">${data.signing.signerName}</p>`), `${regType}: name stays`);
   }
 });
