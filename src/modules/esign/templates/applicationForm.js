@@ -230,6 +230,14 @@ function workPageSignatureSlot(data) {
   return `<div class="sign-slot"><span class="anchor">${SIGNATURE_BOX.anchorText}</span></div>`;
 }
 
+// Who signed, above the signing details. A DocuSign signature stamp already prints the signer's full
+// name, so it takes the name's place; without a signature here (eMudhra) the typed name stays.
+function workPageSignerBlock(data) {
+  return data.signing.workPageSignature
+    ? workPageSignatureSlot(data)
+    : `<p class="strong">${e(data.signing.signerName)}</p>`;
+}
+
 function worksPage(data) {
   return `
     <section class="page">
@@ -247,7 +255,7 @@ function worksPage(data) {
       </div>
       <div class="sign-row">
         <div><p>Date: ${e(data.signing.date)}</p></div>
-        <div class="sign-meta">${workPageSignatureSlot(data)}<p class="strong">${e(data.signing.signerName)}</p>${signingDetails(data)}</div>
+        <div class="sign-meta">${workPageSignerBlock(data)}${signingDetails(data)}</div>
       </div>
     </section>`;
 }
@@ -298,7 +306,8 @@ const STYLES = `
   .sign-meta { text-align: right; }
   .sign-box { position: absolute; top: ${SIGN_BOX_MM.top}mm; left: ${SIGN_BOX_MM.left}mm; width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height}mm; }
   .sign-box .anchor, .sign-slot .anchor { color: #fff; font-size: 1pt; }
-  .sign-slot { width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height}mm; margin-left: auto; text-align: left; }
+  .sign-slot { width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height + 10}mm; margin: 7mm 0 0 auto; text-align: left; }
+  .sign-slot .anchor { display: block; padding-top: 25mm; }
   .date-place { position: absolute; top: ${SIGN_BOX_MM.top + 2}mm; left: 0; line-height: 1.8; }
   .sign-meta.under-box { position: absolute; top: ${SIGN_BOX_MM.top + SIGN_BOX_MM.height + 2}mm; right: 0; line-height: 1.8; }
   .approval { position: absolute; top: 205mm; left: 0; right: 0; text-align: center; font-weight: bold; }
