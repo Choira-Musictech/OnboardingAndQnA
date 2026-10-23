@@ -99,6 +99,18 @@ test('the song card shows role-labelled credits when the service supplied them',
   assert.equal(/Lyricist/.test(withoutRoles), false);
 });
 
+test('the song card lists the publisher after the credits, and omits it when the song has none', () => {
+  const withPublisher = describeSong({
+    songName: 'Samjhawan',
+    artists: ['Arijit Singh'],
+    lyricists: ['Kumaar'],
+    publisher: 'Sony Music Entertainment India Pvt. Ltd.',
+  });
+  assert.match(withPublisher, /Lyricist: Kumaar\nPublisher: Sony Music Entertainment India Pvt\. Ltd\.\n\nIs this your song\?/);
+
+  assert.equal(/Publisher/.test(describeSong({ songName: 'Song', artists: ['Someone'], publisher: null })), false);
+});
+
 test('the credits prompt invites several names at once', () => {
   const message = describeCredits({ artists: ['Pritam', 'Arijit Singh'] });
   assert.match(message, /Pritam, Arijit Singh/);

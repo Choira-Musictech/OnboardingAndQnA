@@ -45,6 +45,14 @@ export const WORK_LINK_ALIAS_INPUT = {
   options: { labels: { placeholder: 'e.g. Aditya Prateek, AP' } },
 };
 
+// Asked of an Owner/Publisher member when the song's own data names no publisher (every YouTube link,
+// and some Spotify ones) - the company is matched against what they answer.
+export const WORK_LINK_PUBLISHER_INPUT = {
+  id: 'work-link-publisher',
+  type: 'text input',
+  options: { labels: { placeholder: 'e.g. T-Series' } },
+};
+
 export const WORK_LINK_MORE_INPUT = {
   id: 'work-link-add-another',
   type: 'choice input',
@@ -92,7 +100,25 @@ export function describeSong(resolved) {
   // lines a songwriter is most likely to check, and the ones that end up in the register.
   if (resolved.composers?.length) lines.push(`Composer: ${resolved.composers.join(', ')}`);
   if (resolved.lyricists?.length) lines.push(`Lyricist: ${resolved.lyricists.join(', ')}`);
+  // The label, so an Owner/Publisher member can see what their company is being matched against.
+  const publisher = [resolved.publisher].flat().filter(Boolean);
+  if (publisher.length) lines.push(`Publisher: ${publisher.join(', ')}`);
   return `${lines.join('\n')}\n\nIs this your song?`;
+}
+
+// Owner/Publisher members: the company is matched on the song's publisher, not on writer credits.
+export function describePublisherAsk() {
+  return 'Who is the publisher or label of this song?';
+}
+
+// The publisher is the member's own text or the platform's label - quoted, so the translator keeps it
+// as typed and one sentence serves every song.
+export function describePublisherMismatch(publisher) {
+  return `This song's publisher is "${publisher}", which doesn't match your company name or trader name.\n\nPlease enter the trader name this publisher is credited under. (Enter separate multiple names with commas)`;
+}
+
+export function describePublisherRetry(publisher) {
+  return `That name doesn't match the publisher "${publisher}" either. Please check how the publisher appears on the release and enter your trader name exactly.`;
 }
 
 // What a resumed chat shows under a link the member pasted earlier: the song as saved, including the
