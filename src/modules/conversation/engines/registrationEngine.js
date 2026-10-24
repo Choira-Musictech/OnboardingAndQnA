@@ -672,7 +672,128 @@ function carriedEmailVerification(session) {
   return { pendingEmailVerification: session.pendingEmailVerification, emailChanges: session.emailChanges ?? 0 };
 }
 
-async function resumeFromJournal({ userId, token, carried = null }) {
+// The work-link step's own questions are driven from here, not by Typebot, so what a member is in the
+// middle of lives only in the in-memory session - a replay (language switch) starts a new Typebot
+// session and would otherwise drop them back at the bare "share a link" question.
+const WORK_STEP_KEYS = [
+  'pendingWorkLinkConfirm',
+  'pendingWorkLinkAlias',
+  'pendingWorkLinkPublisher',
+  'pendingWorkRowDetails',
+  'pendingWorkDetails',
+  'pendingWorkLinkChoice',
+  'pendingWorkLinkDuplicate',
+];
+
+function carriedWorkStep(session) {
+  const state = Object.fromEntries(WORK_STEP_KEYS.filter((key) => session?.[key]).map((key) => [key, session[key]]));
+  return Object.keys(state).length ? state : null;
+}
+
+const WORK_MOVE_ON_ITEM = { id: 'work-link-move-on', content: 'No, move on' };
+
+// The question the member was on, rebuilt from the carried state with the same wording the live flow
+// uses. `history` is what they had already seen under the link (the link, then the song's saved
+// details); `messages` + `input` are the question itself.
+async function workStepReply({ userId, state, urlInput, linkPrompt }) {
+  let rows = [];
+  try {
+    rows = await workLinkService.getWorkLinks(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read saved songs while re-serving the work-link step');
+  }
+  const link = (url) => (url ? [{ sender: 'user', id: 'replay-work-link', answer: url }] : []);
+  const asked = (messages) => messages.map((message) => ({ sender: 'bot', ...message }));
+
+  if (state.pendingWorkRowDetails || state.pendingWorkDetails) {
+    const { queue, index, lastUrl } = state.pendingWorkRowDetails ?? state.pendingWorkDetails;
+    const task = queue[index];
+    const row = rows.find((r) => String(r.WorkNotificationId) === String(task.workNotificationId));
+    const details = describeSavedSong(row);
+    return {
+      history: [...asked(linkPrompt), ...link(lastUrl ?? row?.DigitalLink)],
+      messages: [
+        ...(details ? [textMessage(`song-details-${task.workNotificationId}`, details)] : []),
+        textMessage('work-details-ask', describeWorkDetailsPrompt(task)),
+      ],
+      input: inputForField(task.field),
+    };
+  }
+
+  if (state.pendingWorkLinkConfirm) {
+    const { resolved } = state.pendingWorkLinkConfirm;
+    return {
+      history: [...asked(linkPrompt), ...link(resolved.url)],
+      messages: [textMessage('work-link-confirm', describeSong(resolved))],
+      input: WORK_LINK_CONFIRM_INPUT,
+    };
+  }
+
+  if (state.pendingWorkLinkPublisher) {
+    const { resolved } = state.pendingWorkLinkPublisher;
+    return {
+      history: [...asked(linkPrompt), ...link(resolved.url)],
+      messages: [textMessage('work-link-publisher-ask', describePublisherAsk())],
+      input: WORK_LINK_PUBLISHER_INPUT,
+    };
+  }
+
+  if (state.pendingWorkLinkAlias) {
+    const { resolved } = state.pendingWorkLinkAlias;
+    const { isPublisher } = await registrationService.getIdentityNames(userId);
+    return {
+      history: [...asked(linkPrompt), ...link(resolved.url)],
+      messages: isPublisher && resolved.publisher
+        ? [textMessage('work-link-publisher-mismatch', describePublisherMismatch(resolved.publisher))]
+        : [textMessage('work-link-credits-mismatch', describeCredits(resolved))],
+      input: WORK_LINK_ALIAS_INPUT,
+    };
+  }
+
+  if (state.pendingWorkLinkChoice) {
+    const { lastUrl } = state.pendingWorkLinkChoice;
+    return {
+      history: [...asked(linkPrompt), ...link(lastUrl)],
+      messages: [textMessage('work-link-saved', `Saved - that's ${rows.length} of ${MAX_WORK_LINKS} links. Would you like to add another?`)],
+      input: WORK_LINK_MORE_INPUT,
+    };
+  }
+
+  // The duplicate notice: the url question again, with the way out.
+  return {
+    history: [],
+    messages: [textMessage('work-link-duplicate', 'You\'ve already added that song. Please share a different link, or tap "No, move on" to continue.')],
+    input: { ...urlInput, items: [WORK_MOVE_ON_ITEM] },
+  };
+}
+
+// Landed on the work-link question after a replay. Returns the reply to serve, or null to leave the
+// plain question as it is (nothing saved yet, or the saved-song lookup failed).
+async function resumeWorkStep({ userId, sessionId, response, carriedWork }) {
+  if (carriedWork) {
+    const reply = await workStepReply({ userId, state: carriedWork, urlInput: response.input, linkPrompt: response.messages ?? [] });
+    typebotSessionStore.set(userId, { sessionId, input: response.input, ...carriedWork });
+    return reply;
+  }
+
+  // A link is already saved (e.g. after a refresh): the member has met the minimum, so they may move
+  // on. The duplicate branch of handle() turns "No, move on" into a replay of the latest saved link,
+  // which is how the real step advances without saving it twice.
+  let latest;
+  try {
+    const rows = await workLinkService.getWorkLinks(userId);
+    latest = [...rows].reverse().find((row) => row.DigitalLink);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not read saved songs while resuming the work-link step');
+    return null;
+  }
+  if (!latest) return null;
+
+  typebotSessionStore.set(userId, { sessionId, input: response.input, pendingWorkLinkDuplicate: { url: latest.DigitalLink } });
+  return { history: [], messages: response.messages ?? [], input: { ...response.input, items: [WORK_MOVE_ON_ITEM] } };
+}
+
+async function resumeFromJournal({ userId, token, carried = null, carriedWork = null }) {
   const turns = await conversationJournalService.loadJournal(userId);
   const startResponse = await typebotClient.startChat({
     prefilledVariables: { token, registrationId: userId },
@@ -769,9 +890,29 @@ async function resumeFromJournal({ userId, token, carried = null }) {
     if (withReview) return withReview;
   }
 
+  const history = await withExtractedDetails(await withSongDetails(transcript, userId), userId);
+
+  // On the work-link question: put back the song they were in the middle of (a language switch), or
+  // offer "No, move on" when a link is already saved.
+  if (isWorkLinkStep(response.input.options?.variableId)) {
+    const step = await resumeWorkStep({ userId, sessionId: startResponse.sessionId, response, carriedWork });
+    if (step) {
+      return {
+        sessionEnded: false,
+        history: [...history, ...step.history],
+        messages: [
+          ...(stop === REPLAY_STOP.COMPLETE ? [] : [textMessage('resume-restored', describeResumedPartially())]),
+          ...step.messages,
+        ],
+        input: step.input,
+        progress: resolveProgress(response.input.id),
+      };
+    }
+  }
+
   return {
     sessionEnded: false,
-    history: await withExtractedDetails(await withSongDetails(transcript, userId), userId),
+    history,
     messages: resumedMessages,
     input: response.input,
     progress: resolveProgress(response.input.id),
@@ -826,7 +967,7 @@ async function relocalizeCurrentStep({ userId, token, existing }) {
   }
   if (turns === 0) return null;
 
-  return resumeFromJournal({ userId, token, carried: carriedEmailVerification(existing) });
+  return resumeFromJournal({ userId, token, carried: carriedEmailVerification(existing), carriedWork: carriedWorkStep(existing) });
 }
 
 /**
