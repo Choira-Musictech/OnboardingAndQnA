@@ -224,6 +224,71 @@ test('the cap holds, and a late code is still usable afterwards', async (t) => {
   assert.equal(after.input?.id, 'next-block', 'the OTP still works after the cap');
 });
 
+// The 60-second cooldown is per address: Change email, then the same address again within the minute
+// is refused with a wait. That is not a failure - a code is already in their inbox - so the OTP step
+// has to stay on that address, or Resend OTP / the code itself find nothing pending.
+async function sayWhileOnCooldown(userId, message) {
+  const real = emailOtpService.sendEmailOtp;
+  emailOtpService.sendEmailOtp = async () => {
+    throw Object.assign(new Error('Please wait 51 seconds before requesting another OTP.'), { details: { retryAfterSeconds: 51 } });
+  };
+  try {
+    return await say(userId, message);
+  } finally {
+    emailOtpService.sendEmailOtp = real;
+  }
+}
+
+const textOf = (res) => (res.messages ?? []).map((m) => m.content?.richText?.[0]?.children?.[0]?.text ?? '').join(' ');
+
+test('a cooldown after Change email keeps the OTP step, so Resend OTP sends the code once the wait is over', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  await say(userId, 'cooldown@example.invalid');
+  await say(userId, 'change');
+
+  const waiting = await sayWhileOnCooldown(userId, 'cooldown@example.invalid');
+  assert.equal(waiting.input?.id, 'email-otp-verification', 'the OTP step, with its Resend / Change buttons');
+  assert.match(textOf(waiting), /wait 51 seconds/);
+  const session = typebotSessionStore.get(userId);
+  assert.equal(session.pendingEmailVerification.email, 'cooldown@example.invalid');
+  assert.equal(session.emailChanges, 1, 'the change counter is carried');
+
+  mailedTo.length = 0;
+  const resent = await say(userId, 'Resend OTP');
+  assert.deepEqual(mailedTo, ['cooldown@example.invalid'], 'Resend OTP sends a code to that address');
+  assert.equal(resent.input?.id, 'email-otp-verification');
+  assert.doesNotMatch(textOf(resent), /enter your email address again/i);
+});
+
+test('a cooldown after Change email still lets the code already sent be entered', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  await say(userId, 'cooldown@example.invalid');
+  await say(userId, 'change');
+  await sayWhileOnCooldown(userId, 'cooldown@example.invalid');
+
+  const verified = await say(userId, CORRECT_OTP);
+  assert.equal(verified.input?.id, 'next-block', 'the conversation advances');
+});
+
+test('a send that fails for another reason still leaves the plain email question', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const { userId } = await startAtEmailStep();
+  const real = emailOtpService.sendEmailOtp;
+  emailOtpService.sendEmailOtp = async () => {
+    throw new Error('Failed to send OTP email');
+  };
+  let res;
+  try {
+    res = await say(userId, 'mailfail@example.invalid');
+  } finally {
+    emailOtpService.sendEmailOtp = real;
+  }
+  assert.equal(res.input?.id, 'email-block', 'asked for the address again');
+  assert.equal(typebotSessionStore.get(userId).pendingEmailVerification, undefined);
+});
+
 test('a correct address on the first try still verifies in one pass', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');
   const { userId } = await startAtEmailStep();

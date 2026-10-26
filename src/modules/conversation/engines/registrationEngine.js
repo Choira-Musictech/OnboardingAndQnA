@@ -1725,6 +1725,26 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     try {
       await sendVerificationOtp(message);
     } catch (err) {
+      // A code went to this very address less than a minute ago (e.g. Change email, then the same
+      // address again) and is still valid. Nothing failed - the member just has to wait before a new
+      // one. So the OTP step stays on this address: the code already in their inbox can be entered,
+      // and Resend OTP works once the wait is over. Answering with the plain email question here left
+      // Resend/Change with nothing pending, so they asked for the address again and no code could ever
+      // be had.
+      if (err?.details?.retryAfterSeconds) {
+        typebotSessionStore.set(userId, {
+          sessionId: existing.sessionId,
+          input: existing.input,
+          pendingEmailVerification: { email: message },
+          emailChanges: existing.emailChanges ?? 0,
+        });
+        return {
+          sessionEnded: false,
+          messages: [textMessage('email-otp-wait', describeOtpProblem(err.message))],
+          input: EMAIL_OTP_INPUT,
+          progress: resolveProgress(existing.input.id),
+        };
+      }
       return {
         sessionEnded: false,
         messages: [textMessage('email-otp-send-failed', err.message)],
