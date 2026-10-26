@@ -194,6 +194,7 @@ test('a publisher that is not the company asks for a trader name; a name that ma
   const account = await prisma.appAccounts.findUnique({ where: { AccountId: BigInt(userId) }, select: { AccountAlias: true } });
   assert.match(account.AccountAlias, /Zee Music/, 'remembered for the next song');
   assert.ok(account.AccountAlias.startsWith('Soul Music Bhojpuri'), 'the trusted trader name keeps position 0');
+  assert.equal(await detail9(userId), null, 'a matching trader name leaves the account unflagged');
 });
 
 test('the trader-name step is bounded - after the last miss the song is saved for the team to verify', async (t) => {
@@ -214,6 +215,41 @@ test('the trader-name step is bounded - after the last miss the song is saved fo
   // The follow-up questions come next; the "team will verify" note is held to be shown after them.
   assert.equal(res.input?.id, 'work-film-album');
   assert.match(typebotSessionStore.get(userId).pendingWorkRowDetails.saved, /team will verify/i);
+  assert.equal(await detail9(userId), 'ALIAS_NOT_MATCHED', 'IPRS is told the credit was never matched');
+});
+
+// IPRS finds members whose credit could not be matched through App_Accounts.Detail9.
+const detail9 = async (userId) =>
+  (await prisma.appAccounts.findUnique({ where: { AccountId: BigInt(userId) }, select: { Detail9: true } })).Detail9;
+
+test('a writer who never matches is flagged in Detail9 too, and a matched name is not', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const credited = { composers: ['Pritam'], credits: ['Pritam'], publisher: null };
+
+  const stuck = await makeMember({ AccountRegType: 'I', RollTypeIds: '1', AccountName: 'Rahul Kumar Sharma' });
+  confirming(stuck, song(credited));
+  await say(stuck, YES);
+  for (let attempt = 1; attempt <= MAX_ALIAS_ATTEMPTS; attempt += 1) await say(stuck, 'Totally Different Name');
+  assert.equal((await workLinkService.getWorkLinks(stuck)).length, 1, 'saved for the team to verify');
+  assert.equal(await detail9(stuck), 'ALIAS_NOT_MATCHED');
+
+  const matched = await makeMember({ AccountRegType: 'I', RollTypeIds: '1', AccountName: 'Rahul Kumar Sharma' });
+  confirming(matched, song(credited));
+  await say(matched, YES);
+  await say(matched, 'Pritam');
+  assert.equal((await workLinkService.getWorkLinks(matched)).length, 1);
+  assert.equal(await detail9(matched), null, 'a name that matches leaves the account unflagged');
+});
+
+test('a Detail9 value IPRS already keeps is never overwritten by the flag', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeMember({ AccountRegType: 'I', RollTypeIds: '1', AccountName: 'Rahul Kumar Sharma', Detail9: 'IPRS-OWN-VALUE' });
+  confirming(userId, song({ composers: ['Pritam'], credits: ['Pritam'], publisher: null }));
+  await say(userId, YES);
+  for (let attempt = 1; attempt <= MAX_ALIAS_ATTEMPTS; attempt += 1) await say(userId, 'Totally Different Name');
+
+  assert.equal((await workLinkService.getWorkLinks(userId)).length, 1);
+  assert.equal(await detail9(userId), 'IPRS-OWN-VALUE');
 });
 
 test('an author/composer member is still checked against the credits, not a publisher', async (t) => {
