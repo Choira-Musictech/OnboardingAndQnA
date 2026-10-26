@@ -26,7 +26,7 @@ export const WORK_CATEGORY_INPUT = {
 export const WORK_FILM_ALBUM_INPUT = {
   id: 'work-film-album',
   type: 'text input',
-  options: { labels: { placeholder: 'e.g. Brahmastra, or "Single" if none' } },
+  options: { labels: { placeholder: 'e.g. Brahmastra' } },
 };
 
 export const WORK_PUBLISHER_INPUT = {
@@ -93,7 +93,7 @@ const FIELD_CONFIG = {
 };
 
 const PROMPTS = {
-  Film_AlbumName: (name) => `Is this "${name}" part of a film or album? If yes, please enter the film or album name. If it is a standalone single, enter “Single”.`,
+  Film_AlbumName: (name) => `Please enter the film or album name for "${name}".`,
   Publisher: (name) => `Who is the publisher or label for "${name}"?`,
   WorkCategory: (name) => `What type of work is "${name}"?`,
   LanguageNames: (name) => `What language(s) is "${name}" in?`,
@@ -101,7 +101,7 @@ const PROMPTS = {
 };
 
 const RETRIES = {
-  Film_AlbumName: 'Please enter the film or album name (or "Single" if there is none).',
+  Film_AlbumName: 'Please enter the film or album name.',
   Publisher: 'Please enter the publisher or label name.',
   WorkCategory: 'Please choose one of the options shown.',
   LanguageNames: "That didn't look like a language - please try again.",

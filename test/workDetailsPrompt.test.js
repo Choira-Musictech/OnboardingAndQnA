@@ -11,16 +11,14 @@ process.env.TRANSLATION_ENABLED = 'true';
 process.env.TRANSLATION_PROVIDER = 'dictionary';
 process.env.TRANSLATION_DICTIONARY_PATH = fileURLToPath(new URL('../translations/flow-translations.json', import.meta.url));
 
-const { describeWorkDetailsPrompt } = await import('../src/modules/conversation/services/typebot/workDetailsGate.js');
+const { describeWorkDetailsPrompt, describeWorkDetailsRetry } = await import('../src/modules/conversation/services/typebot/workDetailsGate.js');
 const { dictionaryTranslate } = await import('../src/modules/translation/dictionary.js');
 
 const askAbout = (name) => describeWorkDetailsPrompt({ field: 'Film_AlbumName', songName: name });
 
-test('the film/album question asks for the name and says what to type for a single', () => {
-  assert.equal(
-    askAbout('Samjhawan'),
-    'Is this "Samjhawan" part of a film or album? If yes, please enter the film or album name. If it is a standalone single, enter “Single”.',
-  );
+test('the film/album question only asks for the film or album name', () => {
+  assert.equal(askAbout('Samjhawan'), 'Please enter the film or album name for "Samjhawan".');
+  assert.equal(/single/i.test(askAbout('Samjhawan')), false, 'no "Single" option is offered');
 });
 
 test('the film/album question is translated into every language and keeps the song name as typed', async () => {
@@ -31,5 +29,14 @@ test('the film/album question is translated into every language and keeps the so
       assert.notEqual(translated, english, `${language}: not translated`);
       assert.ok(translated.includes(`"${song}"`), `${language}: the song name must survive as typed`);
     }
+  }
+});
+
+test('the film/album retry asks for the name again and is translated into every language', async () => {
+  const retry = describeWorkDetailsRetry({ field: 'Film_AlbumName' });
+  assert.equal(retry, 'Please enter the film or album name.');
+  for (const language of ['hi', 'mr', 'gu', 'bn', 'ur', 'ta', 'kn', 'te', 'or']) {
+    const [translated] = await dictionaryTranslate([retry], language);
+    assert.notEqual(translated, retry, `${language}: not translated`);
   }
 });

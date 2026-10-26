@@ -34,6 +34,21 @@ async function markCompleted(accountId) {
   return count === 1;
 }
 
+// Detail9 tells IPRS the member's credit on a saved song could not be matched, so staff should verify
+// it. Only an empty Detail9 is filled, so a value IPRS already keeps there is never overwritten.
+export const CREDIT_UNVERIFIED_FLAG = 'ALIAS_NOT_MATCHED';
+
+async function markCreditUnverified(accountId) {
+  const { count } = await prisma.appAccounts.updateMany({
+    where: {
+      AccountId: BigInt(accountId),
+      OR: [{ Detail9: null }, { Detail9: '' }],
+    },
+    data: { Detail9: CREDIT_UNVERIFIED_FLAG },
+  });
+  return count === 1;
+}
+
 // EmailId holds the book's verification team - several addresses in one comma-separated field.
 async function findBook(bookId) {
   if (bookId == null) return null;
@@ -109,6 +124,7 @@ export const registrationRepository = {
   findByAccountId,
   findByAccountEmail,
   markCompleted,
+  markCreditUnverified,
   findBook,
   update,
   upsertDocument,

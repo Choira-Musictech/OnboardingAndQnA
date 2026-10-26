@@ -96,7 +96,7 @@ const VARIABLE_PARTS = [
   // questions are built around the song they named - Is "Kabira" from a film or
   // an album? - so one entry has to serve every song. Exact entries are matched
   // before templates, so the fixed phrases that happen to quote a word, like
-  // ... or "Single" if there is none, are unaffected.
+  // "Please enter the film or album name.", are unaffected.
   /"[^"]*"/g,
   // "Please wait 25 seconds before requesting another OTP" - the count is the
   // value; anchored on the word it counts so a stray number elsewhere in a

@@ -328,8 +328,12 @@ real production schema (`Detail1`/`Detail2` already exist there, and are wider t
 columns were).
 `Detail10` is set to the literal string `'choira'` by `registrationRepository.markCompleted()`, once,
 the first time `ApplicationStatus` flips to 1 — a marker for other `Dreamsoft_UAT` consumers that
-this registration came through the Choira onboarding flow. `Detail3`–`Detail9`, `Detail11`,
-`Detail12` remain unmapped/unused.
+this registration came through the Choira onboarding flow.
+`Detail9` is set to `'ALIAS_NOT_MATCHED'` by `registrationRepository.markCreditUnverified()` when a work
+link was saved although the member's credit on it never matched after `MAX_ALIAS_ATTEMPTS` tries (a writer
+not in the song's credits, or a company that does not match its publisher) - a marker for IPRS staff to
+verify that member's songs. It only fills an empty `Detail9`, so a value IPRS keeps there is never
+overwritten. `Detail3`–`Detail8`, `Detail11`, `Detail12` remain unmapped/unused.
 
 **Auth model**: the frontend runs the existing `/auth/send-otp` + `/auth/verify-otp` first (no new
 token mechanism) and then calls the conversation endpoints with `Authorization: Bearer <token>` —

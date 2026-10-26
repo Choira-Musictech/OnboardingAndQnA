@@ -969,8 +969,19 @@ function toPublic(account) {
   };
 }
 
+// A song was saved although the member's credit on it could not be matched: flag the account for IPRS.
+// Best effort - a failed flag must never stop the member moving on.
+async function flagUnverifiedCredit(userId) {
+  try {
+    await registrationRepository.markCreditUnverified(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Could not flag the unverified credit on the account');
+  }
+}
+
 export const registrationService = {
   getIdentityNames,
+  flagUnverifiedCredit,
   getStatus,
   saveDocument,
   confirmDocument,

@@ -448,7 +448,7 @@ function finishSaveOutcome({ userId, existing, atCap, lastUrl, saved }) {
 // nothing at all, so the fifth link saved silently and a sixth was discarded silently, both while the
 // other four each got a "Saved - that's N of 5" line. Confirming a song and being told nothing reads
 // as a bug.
-async function saveAndOfferAnother({ userId, existing, resolved, note }) {
+async function saveAndOfferAnother({ userId, existing, resolved, note, unverified = false }) {
   let count = null;
   let stored = null;
   try {
@@ -483,6 +483,9 @@ async function saveAndOfferAnother({ userId, existing, resolved, note }) {
   if (!stored) {
     return { advance: true, notice: `You've already added the maximum of ${MAX_WORK_LINKS} links, so this one wasn't saved.` };
   }
+
+  // Kept although the member's credit on it never matched: mark the account so IPRS knows to check it.
+  if (unverified) await registrationService.flagUnverifiedCredit(userId);
 
   const atCap = count >= MAX_WORK_LINKS;
   const queue = buildWorkDetailsQueue([stored]);
@@ -1442,6 +1445,7 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
       note: matched
         ? "Thanks - we've saved this song, and we'll remember that name for your next one."
         : "We've saved this song. Our team will verify your credit on it.",
+      unverified: !matched,
     });
     if (!outcome.advance) return outcome;
     workLinkNotice = outcome.notice;
