@@ -34,3 +34,30 @@ test('a translation never drops or invents a slot', () => {
     }
   }
 });
+
+test('Odia and Telugu application requirement translations retain the document checklist detail', () => {
+  const requirementEntries = Object.entries(dictionary).filter(
+    ([phrase]) => phrase.startsWith('Requirements for ') && phrase.includes('APPLICATION FEE'),
+  );
+  assert.equal(requirementEntries.length, 6, 'all six application paths should be covered');
+
+  const refundText = {
+    or: 'ଫେରସ୍ତଯୋଗ୍ୟ ନୁହେଁ',
+    te: 'తిరిగి చెల్లించబడదు',
+  };
+
+  for (const [phrase, entry] of requirementEntries) {
+    for (const language of ['or', 'te']) {
+      const lines = entry[language].split('\n').filter((line) => line.trim());
+      assert.ok(
+        lines.length >= 8,
+        `${language}: "${phrase.slice(0, 60)}" should retain separate requirement details`,
+      );
+      assert.match(entry[language], /₹\s*\d+/, `${language}: application fee is missing`);
+      assert.ok(
+        entry[language].includes(refundText[language]),
+        `${language}: non-refundable notice is missing`,
+      );
+    }
+  }
+});
