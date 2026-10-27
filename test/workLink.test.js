@@ -58,7 +58,9 @@ test('add-another answers', () => {
 });
 
 test('move-on answers (the duplicate-link message\'s button)', () => {
-  for (const yes of ['No, move on', 'no', 'move on', 'skip']) assert.equal(isMoveOnKeyword(yes), true, yes);
+  // "No, continue" too: it reads the same as "No, move on" in every language, so that is what a tap on
+  // the move-on button comes back as once the label has been mapped back to English.
+  for (const yes of ['No, move on', 'No, continue', 'no', 'move on', 'continue', 'skip']) assert.equal(isMoveOnKeyword(yes), true, yes);
   // A real link (or anything else) must NOT be read as "move on" - it has to fall through and be
   // resolved as a fresh link paste, not silently discarded.
   for (const notMoveOn of ['https://open.spotify.com/track/abc', 'yes', '']) {
