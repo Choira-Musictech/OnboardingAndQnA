@@ -73,9 +73,11 @@ test('switching language at a song details question keeps the song and the quest
   const res = await switchLanguage();
 
   assert.notEqual(res.input?.id, URL_INPUT.id, 'not the bare link question');
-  assert.match(texts(res), /Song details saved\n\nSong: Samjhawan\nPublisher: Sony Music/);
   assert.match(texts(res), /film or album/i, 'the same question again');
-  assert.ok(res.history.some((e) => e.sender === 'user' && e.answer === SONG_URL), 'the link the member pasted is shown');
+  // The link they pasted and the details they gave so far are above the question, in the history.
+  const link = res.history.findIndex((e) => e.sender === 'user' && e.answer === SONG_URL);
+  assert.ok(link >= 0, 'the link the member pasted is shown');
+  assert.match(text(res.history[link + 1]), /Song details saved\n\nSong: Samjhawan\nPublisher: Sony Music/);
   // The pending state is back, so answering carries on exactly where it was.
   const session = typebotSessionStore.get(USER);
   assert.equal(session.sessionId, 'new-session');
@@ -112,6 +114,13 @@ test('a link already saved and no step in progress: the link question offers "No
   assert.deepEqual(res.input.items.map((i) => i.content), ['No, move on']);
   // "No, move on" is handled by the duplicate branch, which replays the latest saved link.
   assert.deepEqual(typebotSessionStore.get(USER).pendingWorkLinkDuplicate, { url: SONG_URL });
+
+  // Once a link is saved the live question is "the next link" (what Add another said), not Typebot's
+  // first prompt; that one moves up into the history, ahead of the saved songs.
+  assert.equal(texts(res), 'Please share the next link to your work.');
+  const prompt = res.history.findIndex((e) => text(e) === 'Please share a link to your work.');
+  const firstLink = res.history.findIndex((e) => e.sender === 'user');
+  assert.ok(prompt >= 0 && prompt < firstLink, 'the first prompt comes before the saved songs');
 });
 
 test('no link saved yet: the link question is left as it is, with no move-on button', async () => {
@@ -131,4 +140,67 @@ test('when the saved songs cannot be read, the link question is served as before
 
   assert.equal(res.input?.id, URL_INPUT.id);
   assert.equal(res.input.items, undefined);
+});
+
+// --- earlier songs, and the move-on tap -------------------------------------
+
+const secondSong = { ...savedSong, WorkNotificationId: 8, DigitalLink: 'https://youtu.be/second', SongName: 'Second song', Film_AlbumName: 'Some Album', WorkCategory: 'Film', LanguageNames: 'Hindi', ReleaseYear: 2022 };
+
+test('after "Add another" and a switch, the songs already saved are shown with their answers', async () => {
+  savedRows = [{ ...savedSong, Film_AlbumName: 'sawariya', WorkCategory: 'Film', LanguageNames: 'hindi', ReleaseYear: 2022 }, secondSong];
+
+  const res = await switchLanguage();
+
+  assert.equal(res.input?.id, URL_INPUT.id, 'the link question, with the way out');
+  assert.deepEqual(res.input.items.map((i) => i.content), ['No, move on']);
+  assert.equal(texts(res), 'Please share the next link to your work.', 'what Add another said, not the first-link prompt');
+  assert.doesNotMatch(texts(res), /at least 1/i);
+  const cards = res.history.filter((e) => String(e.id).startsWith('song-details-')).map(text);
+  assert.equal(cards.length, 2, 'one card per saved song');
+  assert.match(cards[0], /Film\/Album: sawariya\nPublisher: Sony Music\nCategory: Film\nLanguage: hindi\nReleased: 2022/);
+  assert.match(cards[1], /Song: Second song\nFilm\/Album: Some Album/);
+  assert.deepEqual(res.history.filter((e) => e.sender === 'user').map((e) => e.answer), [SONG_URL, 'https://youtu.be/second']);
+});
+
+test('a card the journal replay already placed under its link is not shown twice', async () => {
+  savedRows = [savedSong];
+  conversationJournalService.replayJournal = async () => ({
+    response: { input: URL_INPUT, messages: [] },
+    replayed: 0,
+    askedInputs: [],
+    stop: REPLAY_STOP.COMPLETE,
+    transcript: [{ sender: 'user', answer: SONG_URL }],
+  });
+  // withSongDetails puts the card under the link turn; savedSongHistory must see that and add nothing.
+  const res = await switchLanguage();
+
+  assert.equal(res.history.filter((e) => String(e.id).startsWith('song-details-')).length, 1);
+  assert.equal(res.history.filter((e) => e.sender === 'user' && e.answer === SONG_URL).length, 1);
+});
+
+test('a tap on "No, move on" that comes back as "No, continue" is move-on, not a link to resolve', async () => {
+  // "No, move on" and "No, continue" read the same in Hindi, so the dictionary hands the tap back as
+  // "No, continue". It must advance the step with the latest saved link, not ask for a link again.
+  savedRows = [savedSong];
+  await switchLanguage();
+  assert.deepEqual(typebotSessionStore.get(USER).pendingWorkLinkDuplicate, { url: SONG_URL });
+
+  const real = { cont: typebotClient.continueChat, record: conversationJournalService.recordTurn };
+  const sent = [];
+  typebotClient.continueChat = async ({ message }) => {
+    sent.push(message?.text);
+    return { messages: [bubble('next', 'Next question')], input: { id: 'next-block', type: 'text input', options: {} } };
+  };
+  conversationJournalService.recordTurn = async () => {};
+  let res;
+  try {
+    res = await handle({ userId: USER, token: 't', message: 'No, continue' });
+  } finally {
+    typebotClient.continueChat = real.cont;
+    conversationJournalService.recordTurn = real.record;
+  }
+
+  assert.deepEqual(sent, [SONG_URL], 'the latest saved link is replayed into the real step');
+  assert.equal(res.input?.id, 'next-block', 'the flow moved on');
+  assert.doesNotMatch(texts(res), /Spotify or YouTube link/);
 });

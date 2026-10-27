@@ -82,9 +82,14 @@ export function wantsAnotherLink(message) {
 // WORK_LINK_DUPLICATE branch) - a real url-input block with a button attached, not a synthetic
 // choice input, so anything that ISN'T this keyword falls through as a fresh link paste attempt
 // rather than being read as a decline (unlike wantsAnotherLink, which owns a strict yes/no step).
+//
+// "No, continue" is accepted too, and that is not optional: a tapped button comes back to the engine as
+// its translated label, mapped to English through the dictionary. "No, move on" and the add-another
+// step's "No, continue" read the same in every language, so the dictionary hands a tap on "No, move
+// on" back as "No, continue" - which used to be taken for a pasted link and ask for the link again.
 export function isMoveOnKeyword(message) {
   const answer = normalizeAnswer(message);
-  return ['no, move on', 'no', 'move on', 'skip'].includes(answer);
+  return ['no, move on', 'no, continue', 'no', 'move on', 'continue', 'skip'].includes(answer);
 }
 
 // --- Message text -----------------------------------------------------------
