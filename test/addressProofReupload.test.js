@@ -69,7 +69,7 @@ function stubUploadPlumbing() {
     return { presignedUrl: 'https://s3/presigned', formData: {}, fileUrl: `https://s3/file-${uploadCount}.jpg` };
   };
   typebotClient.uploadToPresignedUrl = async () => {};
-  // Otherwise every run writes this fake member's file into the real DOCUMENT_STORAGE_DIR.
+  // Otherwise every run writes this fake member's file into the real MEMBER_PHOTO_DIR / MEMBER_DOCUMENT_DIR.
   documentStorageService.saveMemberDocument = async () => null;
 }
 
