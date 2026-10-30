@@ -8,13 +8,44 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { badRequestError, unauthorizedError } from '../../../shared/errors.js';
+import { env } from '../../../config/env.js';
 import { signAccessToken } from '../../../utils/token.js';
 import { normalizePhone } from '../../../utils/phone.js';
 import { userRepository } from '../../user/repositories/user.repository.js';
 import { createOtpProvider } from './otp/otpProvider.factory.js';
 import { tokenBlacklist } from './tokenBlacklist.js';
 
-export function createAuthService({ otpProvider = createOtpProvider() } = {}) {
+export function createAuthService({
+  otpProvider = createOtpProvider(),
+  cooldownSeconds = env.PHONE_OTP_RESEND_COOLDOWN_SECONDS,
+  now = Date.now,
+} = {}) {
+  // canonical phone -> when its last OTP was sent. In memory, like the email OTP store: a restart
+  // simply clears the wait.
+  const lastSentAt = new Map();
+
+  function prune() {
+    const cutoff = now() - cooldownSeconds * 1000;
+    for (const [phone, sentAt] of lastSentAt) {
+      if (sentAt <= cutoff) lastSentAt.delete(phone);
+    }
+  }
+
+  // The frontend waits too, but only an API-side check stops a direct call from asking for codes
+  // back to back. The message is shown to the member verbatim, so it says how long.
+  function assertCooldownOver(canonicalPhone) {
+    if (cooldownSeconds <= 0) return;
+    prune();
+    const sentAt = lastSentAt.get(canonicalPhone);
+    if (sentAt === undefined) return;
+    const retryAfterSeconds = Math.ceil((cooldownSeconds * 1000 - (now() - sentAt)) / 1000);
+    if (retryAfterSeconds <= 0) return;
+    throw badRequestError(
+      `Please wait ${retryAfterSeconds} second${retryAfterSeconds === 1 ? '' : 's'} before requesting another OTP.`,
+      { details: { retryAfterSeconds }, errorCode: 'OTP_COOLDOWN' },
+    );
+  }
+
   // AccountMobile is the login identity, so every path - OTP send, OTP verify, lookup and create -
   // has to agree on one spelling of the number. Without this, "+919876543210" and "9876543210" are
   // the same person to MSG91 but two different accounts to us. See utils/phone.js.
@@ -26,7 +57,10 @@ export function createAuthService({ otpProvider = createOtpProvider() } = {}) {
 
   async function sendOtp({ phone }) {
     const canonicalPhone = toCanonicalPhone(phone);
+    assertCooldownOver(canonicalPhone);
     await otpProvider.send(canonicalPhone);
+    // After the send succeeds, so a failed SMS does not lock the member out.
+    lastSentAt.set(canonicalPhone, now());
 
     // Dev-only: echo the generated OTP so the flow can be exercised
     // without an SMS gateway. Keyed by the same canonical number send() used.
@@ -35,7 +69,12 @@ export function createAuthService({ otpProvider = createOtpProvider() } = {}) {
         ? await otpProvider.getLastOtp(canonicalPhone)
         : null;
 
-    return { message: 'OTP sent', ...(mockOtp ? { otp: mockOtp } : {}) };
+    // So the login screen counts down the same wait the server enforces, whatever it is set to.
+    return {
+      message: 'OTP sent',
+      ...(cooldownSeconds > 0 ? { resendAfterSeconds: cooldownSeconds } : {}),
+      ...(mockOtp ? { otp: mockOtp } : {}),
+    };
   }
 
   async function verifyOtp({ phone, otp, ip, guid }) {

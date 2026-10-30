@@ -20,6 +20,8 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  // How long a phone number waits before it can be sent another login OTP; 0 turns the wait off.
+  PHONE_OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(0).default(60),
 
   OTP_PROVIDER: z.enum(['mock', 'sms']).default('mock'),
   OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
