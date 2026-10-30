@@ -159,9 +159,11 @@ const envSchema = z.object({
   TYPEBOT_API_TOKEN: z.string().optional(),
   TYPEBOT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
-  // Where each member's uploads are also copied, one folder per member (see
-  // documentStorage.service.js). Blank turns the copy off.
-  DOCUMENT_STORAGE_DIR: z.string().default('uploads/member-documents'),
+  // The two folders every member's uploads are also copied to (see documentStorage.service.js):
+  // photos as MPU_<AccountId>_<file>, documents as MRU_<AccountId>_<DocumentLookupId>_<file>.
+  // Blank turns that copy off.
+  MEMBER_PHOTO_DIR: z.string().default('uploads/MemberPhoto'),
+  MEMBER_DOCUMENT_DIR: z.string().default('uploads/MemberDocuments'),
 
   /* Signed document links - a resumed chat reads its documents back through this
      API, because the uploader's bucket sends no CORS headers. */

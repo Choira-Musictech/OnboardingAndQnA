@@ -210,15 +210,18 @@ builder API, `bot.builder.choira.io/api/v1/typebots/{id}/publishedTypebot`) — 
 called `basic-details` or `complete` even before this, since no HTTP Request blocks exist in the
 flow to call them.
 
-**Per-member folder copy.** After `saveDocument()` returns, `handleUploadCore()` also writes the
-uploaded bytes to this server's own disk via `documentStorage.service.js`:
-`DOCUMENT_STORAGE_DIR/<NAME>_<AccountId>/<label>.<ext>` (e.g. `pan_card.jpg`,
-`permanent_address_proof-driving_licence.jpg`). The canonical copy is still the one in Typebot's
-storage — Typebot picks its own S3 keys, so per-member folders can only exist in storage this app
-owns. Until `AccountName` is known (it comes from PAN/Aadhaar/passport/GST OCR) the folder is just
-`<AccountId>`; the first upload after a name is on file renames it. A re-upload replaces that
-slot's earlier file. The copy is best-effort (a disk failure is logged, never fails the upload),
-not backfilled for earlier members, and never served over HTTP — these are identity documents.
+**Member photo / document folders.** After `saveDocument()` returns, `handleUploadCore()` also
+writes the uploaded bytes via `documentStorage.service.js` to one of two folders shared by all
+members, named the IPRS way: `PROFILE_PHOTO`/`COMPANY_PHOTO` go to
+`MEMBER_PHOTO_DIR/MPU_<AccountId>_<file name as uploaded>`, everything else to
+`MEMBER_DOCUMENT_DIR/MRU_<AccountId>_<DocumentLookupId>_<file name as uploaded>`
+(e.g. `MRU_1042_1_pan front.jpg`). `DocumentLookupId` comes from `documentLookupMap.js` for the
+member's path; a document with no number there (or before the path is known) is named by its
+docType instead, as is `COMPANY_NOC` (it shares id 95 with `NOC`). There is no `N1` here, unlike
+the DB's `DocFileName`, which is unchanged. The canonical copy is still the one in Typebot's storage
+— Typebot picks its own S3 keys. A re-upload replaces that slot's earlier file. The copy is
+best-effort (a disk failure is logged, never fails the upload), not backfilled for earlier members,
+and never served over HTTP — these are identity documents.
 
 **`POST /registration/start`, `PATCH /registration/:registrationId/basic-details`, and
 `PUT /registration/status` were removed** — grepped every call site in `src/` and confirmed nothing

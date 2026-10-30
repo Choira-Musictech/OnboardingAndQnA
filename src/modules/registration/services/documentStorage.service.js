@@ -1,29 +1,35 @@
 // ==================================================================
-// A copy of every uploaded document, kept on this server's own disk, one
-// folder per member: <DOCUMENT_STORAGE_DIR>/<NAME>_<AccountId>/pan_card.jpg.
+// A copy of every uploaded document, kept in two folders shared by all
+// members, named the IPRS way:
+//   MEMBER_PHOTO_DIR/MPU_<AccountId>_<file name as uploaded>
+//   MEMBER_DOCUMENT_DIR/MRU_<AccountId>_<DocumentLookupId>_<file name as uploaded>
 //
 // The real upload still goes to Typebot's storage - the flow needs that URL
-// to advance - and Typebot decides its own S3 keys, so per-member folders
-// can only exist in storage this app owns.
+// to advance - and Typebot decides its own S3 keys, so these folders can only
+// exist in storage this app owns.
 //
-// The member's name usually isn't known at the first upload: AccountName is
-// written once, from a PAN/Aadhaar/passport/GST OCR result. Until then the
-// folder is just <AccountId>, and it is renamed the first time a name is on
-// file. Every path segment is a numeric id, a fixed label or a strict slug,
-// so nothing a member typed or OCR read can escape the base folder.
+// DocumentLookupId is IPRS's fixed Doc_LookUp number for the document on the
+// member's path (PAN 1, bank 2, ... - see documentLookupMap.js). A document
+// with no number there is named by its docType instead, so it is never lost.
+// The account id is numeric and the uploaded name has every character a file
+// system treats specially replaced, so nothing can escape either folder.
 // ==================================================================
-import { mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { readdir, mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../../../config/env.js';
 import { registrationRepository } from '../repositories/registration.repository.js';
+import { DOC_LOOKUP_ID_BY_PATH } from './documentLookupMap.js';
+import { resolveDocPathKey } from './registration.service.js';
 
-// Only where the enum name alone wouldn't read as the document a person recognises.
-const FILE_LABELS = {
-  PAN: 'pan_card',
-  COMPANY_PAN: 'company_pan_card',
-  AADHAAR: 'aadhaar_card',
-  BANK: 'bank_cheque_or_passbook',
-};
+const PHOTO_DOC_TYPES = new Set(['PROFILE_PHOTO', 'COMPANY_PHOTO']);
+
+// COMPANY_NOC shares Doc_LookUp id 95 with NOC on the Corporate path - numbered alike, a company NOC
+// upload would replace the member's NOC file. Named by docType so the two stay apart.
+const NAMED_BY_DOC_TYPE = new Set(['COMPANY_NOC']);
+
+// A docType that is another one plus a suffix. Both named by docType, the shorter slot's prefix
+// (MRU_<id>_COMM_ADDRESS_PROOF_) would also match the longer one's files on a re-upload.
+const EXTENDED_DOC_TYPES = ['COMM_ADDRESS_PROOF_2'];
 
 const EXTENSION_BY_MIME = {
   'image/jpeg': 'jpg',
@@ -32,70 +38,49 @@ const EXTENSION_BY_MIME = {
   'application/pdf': 'pdf',
 };
 
-function slugify(name) {
-  return String(name ?? '')
-    .replace(/[^A-Za-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 60)
-    .replace(/_+$/, '');
+const MAX_FILE_NAME_LENGTH = 200;
+
+// The member's own file name, kept as uploaded except for what no file system can hold.
+function uploadedName(originalName, docType, mimeType) {
+  const safe = path.basename(String(originalName ?? '').replaceAll('\\', '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  if (safe && !/^\.+$/.test(safe)) return safe;
+  return `${docType.toLowerCase()}.${EXTENSION_BY_MIME[mimeType] ?? 'bin'}`;
 }
 
-// Labels are [a-z0-9_] only, so the hyphen before an address-proof type can never be confused
-// with part of another label - "comm_address_proof" stays distinct from "comm_address_proof_2".
-function fileLabel(docType, addressProofType) {
-  const label = FILE_LABELS[docType] ?? docType.toLowerCase();
-  return addressProofType ? `${label}-${addressProofType.toLowerCase()}` : label;
+// Keeps the extension when a very long name has to be cut.
+function fitLength(name) {
+  if (name.length <= MAX_FILE_NAME_LENGTH) return name;
+  const ext = path.extname(name);
+  return name.slice(0, MAX_FILE_NAME_LENGTH - ext.length) + ext;
 }
 
-function extensionOf(originalName, mimeType) {
-  const fromName = path.extname(String(originalName ?? '')).slice(1).toLowerCase();
-  if (/^[a-z0-9]{1,5}$/.test(fromName)) return fromName;
-  return EXTENSION_BY_MIME[mimeType] ?? 'bin';
-}
-
-async function exists(target) {
-  try {
-    await stat(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function createDocumentStorage({ baseDir, findAccount }) {
-  async function memberFolder(accountId) {
-    const idFolder = path.join(baseDir, String(accountId));
+export function createDocumentStorage({ photoDir, documentDir, findAccount }) {
+  async function documentNumber(accountId, docType) {
+    if (NAMED_BY_DOC_TYPE.has(docType)) return docType;
     const account = await findAccount(accountId);
-    const slug = slugify(account?.AccountName);
-    if (!slug) {
-      await mkdir(idFolder, { recursive: true });
-      return idFolder;
-    }
-
-    const namedFolder = path.join(baseDir, `${slug}_${accountId}`);
-    if (!(await exists(namedFolder)) && (await exists(idFolder))) {
-      await rename(idFolder, namedFolder);
-    }
-    await mkdir(namedFolder, { recursive: true });
-    return namedFolder;
+    const pathKey = account ? resolveDocPathKey(account) : null;
+    return (pathKey && DOC_LOOKUP_ID_BY_PATH[pathKey]?.[docType]) ?? docType;
   }
 
-  async function saveMemberDocument({ accountId, docType, addressProofType, buffer, originalName, mimeType }) {
-    if (!baseDir?.trim() || !docType || !buffer) return null;
+  async function saveMemberDocument({ accountId, docType, buffer, originalName, mimeType }) {
+    if (!docType || !buffer) return null;
     if (!/^\d+$/.test(String(accountId))) throw new Error(`Refusing a non-numeric accountId: ${accountId}`);
 
-    const folder = await memberFolder(accountId);
-    const baseLabel = FILE_LABELS[docType] ?? docType.toLowerCase();
+    const isPhoto = PHOTO_DOC_TYPES.has(docType);
+    const folder = isPhoto ? photoDir : documentDir;
+    if (!folder?.trim()) return null;
 
-    // Re-upload replaces: drop this slot's earlier copy, whatever its extension or address-proof type.
+    // The trailing underscore keeps MRU_10_1_ from matching MRU_104_... or MRU_10_11_...
+    const slot = isPhoto ? `MPU_${accountId}_` : `MRU_${accountId}_${await documentNumber(accountId, docType)}_`;
+    const otherSlots = EXTENDED_DOC_TYPES.map((type) => `MRU_${accountId}_${type}_`).filter((other) => other.length > slot.length);
+
+    await mkdir(folder, { recursive: true });
+    // Re-upload replaces: drop this slot's earlier file, whatever it was called.
     for (const entry of await readdir(folder)) {
-      const stem = path.parse(entry).name;
-      if (stem === baseLabel || stem.startsWith(`${baseLabel}-`)) {
-        await unlink(path.join(folder, entry));
-      }
+      if (entry.startsWith(slot) && !otherSlots.some((other) => entry.startsWith(other))) await unlink(path.join(folder, entry));
     }
 
-    const target = path.join(folder, `${fileLabel(docType, addressProofType)}.${extensionOf(originalName, mimeType)}`);
+    const target = path.join(folder, fitLength(slot + uploadedName(originalName, docType, mimeType)));
     await writeFile(target, buffer);
     return target;
   }
@@ -104,6 +89,7 @@ export function createDocumentStorage({ baseDir, findAccount }) {
 }
 
 export const documentStorageService = createDocumentStorage({
-  baseDir: env.DOCUMENT_STORAGE_DIR,
+  photoDir: env.MEMBER_PHOTO_DIR,
+  documentDir: env.MEMBER_DOCUMENT_DIR,
   findAccount: (accountId) => registrationRepository.findByAccountId(accountId),
 });

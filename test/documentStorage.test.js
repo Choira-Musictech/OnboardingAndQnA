@@ -1,6 +1,6 @@
 // ==================================================================
-// documentStorage.service.js - the per-member folder copy of each upload (node:test).
-// Real filesystem in a throwaway temp folder, fake account lookup - no DB.
+// documentStorage.service.js - the photo and document folder copies of each upload (node:test).
+// Real filesystem in throwaway temp folders, fake account lookup - no DB.
 // Run: npm test
 // ==================================================================
 import { test } from 'node:test';
@@ -10,10 +10,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { createDocumentStorage } from '../src/modules/registration/services/documentStorage.service.js';
 
+const INDIVIDUAL = { AccountRegType: 'I' };
+
 async function setup() {
-  const baseDir = await mkdtemp(path.join(os.tmpdir(), 'member-docs-'));
-  const accounts = new Map();
-  const storage = createDocumentStorage({ baseDir, findAccount: async (id) => accounts.get(String(id)) ?? null });
+  const root = await mkdtemp(path.join(os.tmpdir(), 'member-files-'));
+  const photoDir = path.join(root, 'MemberPhoto');
+  const documentDir = path.join(root, 'MemberDocuments');
+  const accounts = new Map([['17331', INDIVIDUAL]]);
+  const storage = createDocumentStorage({ photoDir, documentDir, findAccount: async (id) => accounts.get(String(id)) ?? null });
   const save = (overrides) =>
     storage.saveMemberDocument({
       accountId: '17331',
@@ -24,101 +28,152 @@ async function setup() {
       mimeType: 'image/jpeg',
       ...overrides,
     });
-  const cleanup = () => rm(baseDir, { recursive: true, force: true });
-  return { baseDir, accounts, save, cleanup };
+  const cleanup = () => rm(root, { recursive: true, force: true });
+  return { photoDir, documentDir, accounts, save, cleanup };
 }
 
-const list = async (dir) => (await readdir(dir)).sort();
+const list = async (dir) => (await readdir(dir).catch(() => [])).sort();
 
-test('with no name on file yet, the document lands in a folder named by AccountId', async () => {
-  const { baseDir, save, cleanup } = await setup();
+test('a document is named MRU_<AccountId>_<DocumentLookupId>_<uploaded name> in the documents folder', async () => {
+  const { photoDir, documentDir, save, cleanup } = await setup();
   try {
-    await save({ docType: 'PROFILE_PHOTO' });
-    assert.deepEqual(await list(baseDir), ['17331']);
-    assert.deepEqual(await list(path.join(baseDir, '17331')), ['profile_photo.jpg']);
+    await save({ docType: 'PAN', originalName: 'pan front.jpg' });
+    await save({ docType: 'BANK', originalName: 'Cheque-1.pdf', mimeType: 'application/pdf' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_1_pan front.jpg', 'MRU_17331_2_Cheque-1.pdf']);
+    assert.deepEqual(await list(photoDir), []);
   } finally {
     await cleanup();
   }
 });
 
-test('once the name is known, the folder is renamed and earlier documents move with it', async () => {
-  const { baseDir, accounts, save, cleanup } = await setup();
+test('the profile photo and a company photo go to the photos folder as MPU_<AccountId>_<uploaded name>', async () => {
+  const { photoDir, documentDir, accounts, save, cleanup } = await setup();
   try {
-    await save({ docType: 'PROFILE_PHOTO' });
-    accounts.set('17331', { AccountName: 'Swapnil Sharma' });
-    await save({ docType: 'PAN' });
-
-    assert.deepEqual(await list(baseDir), ['Swapnil_Sharma_17331']);
-    assert.deepEqual(await list(path.join(baseDir, 'Swapnil_Sharma_17331')), ['pan_card.jpg', 'profile_photo.jpg']);
+    await save({ docType: 'PROFILE_PHOTO', originalName: 'IMG_2031.jpg' });
+    accounts.set('500', { AccountRegType: 'NC' });
+    await save({ accountId: '500', docType: 'COMPANY_PHOTO', originalName: 'office.png', mimeType: 'image/png' });
+    assert.deepEqual(await list(photoDir), ['MPU_17331_IMG_2031.jpg', 'MPU_500_office.png']);
+    assert.deepEqual(await list(documentDir), []);
   } finally {
     await cleanup();
   }
 });
 
-test('a re-upload replaces the earlier copy, even with a different extension', async () => {
-  const { baseDir, accounts, save, cleanup } = await setup();
+test('the number follows the member path: a Corporate company PAN is 91', async () => {
+  const { documentDir, accounts, save, cleanup } = await setup();
   try {
-    accounts.set('17331', { AccountName: 'Swapnil' });
-    await save({ docType: 'BANK', originalName: 'cheque.jpg' });
-    await save({ docType: 'BANK', originalName: 'cheque.pdf', mimeType: 'application/pdf' });
-
-    assert.deepEqual(await list(path.join(baseDir, 'Swapnil_17331')), ['bank_cheque_or_passbook.pdf']);
+    accounts.set('17331', { AccountRegType: 'C', EntityType: 'CP' });
+    await save({ docType: 'COMPANY_PAN', originalName: 'cpan.jpg' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_91_cpan.jpg']);
   } finally {
     await cleanup();
   }
 });
 
-test('an address proof is named by its slot and the chosen type, and re-picking the type replaces it', async () => {
-  const { baseDir, accounts, save, cleanup } = await setup();
+test('a document with no Doc_LookUp number, or before the path is known, is named by its docType', async () => {
+  const { documentDir, accounts, save, cleanup } = await setup();
   try {
-    accounts.set('17331', { AccountName: 'Swapnil' });
-    await save({ docType: 'PERMANENT_ADDRESS_PROOF', addressProofType: 'DRIVING_LICENCE' });
-    assert.deepEqual(await list(path.join(baseDir, 'Swapnil_17331')), ['permanent_address_proof-driving_licence.jpg']);
-
-    await save({ docType: 'PERMANENT_ADDRESS_PROOF', addressProofType: 'PASSPORT' });
-    assert.deepEqual(await list(path.join(baseDir, 'Swapnil_17331')), ['permanent_address_proof-passport.jpg']);
+    await save({ docType: 'GST', originalName: 'gst.pdf' });
+    accounts.delete('17331');
+    await save({ docType: 'PAN', originalName: 'pan.jpg' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_GST_gst.pdf', 'MRU_17331_PAN_pan.jpg']);
   } finally {
     await cleanup();
   }
 });
 
-test('an address proof with no OCR-able type keeps just the slot name', async () => {
-  const { baseDir, save, cleanup } = await setup();
+test('a company NOC and the NOC share id 95 but never replace each other', async () => {
+  const { documentDir, accounts, save, cleanup } = await setup();
   try {
-    await save({ docType: 'CURRENT_ADDRESS_PROOF', addressProofType: null });
-    assert.deepEqual(await list(path.join(baseDir, '17331')), ['current_address_proof.jpg']);
+    accounts.set('17331', { AccountRegType: 'C', EntityType: 'CP' });
+    await save({ docType: 'NOC', originalName: 'noc.pdf' });
+    await save({ docType: 'COMPANY_NOC', originalName: 'company noc.pdf' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_95_noc.pdf', 'MRU_17331_COMPANY_NOC_company noc.pdf']);
   } finally {
     await cleanup();
   }
 });
 
-test('slots whose names share a prefix never replace each other', async () => {
-  const { baseDir, save, cleanup } = await setup();
+test('a re-upload replaces only that slot, whatever the new file is called', async () => {
+  const { photoDir, documentDir, save, cleanup } = await setup();
   try {
-    await save({ docType: 'COMM_ADDRESS_PROOF' });
-    await save({ docType: 'COMM_ADDRESS_PROOF_2' });
-    await save({ docType: 'COMM_ADDRESS_PROOF' });
+    await save({ docType: 'PAN', originalName: 'old.jpg' });
+    await save({ docType: 'BANK', originalName: 'bank.jpg' });
+    await save({ docType: 'PROFILE_PHOTO', originalName: 'me.jpg' });
+    await save({ docType: 'PAN', originalName: 'new.pdf', mimeType: 'application/pdf' });
+    await save({ docType: 'PROFILE_PHOTO', originalName: 'me2.png', mimeType: 'image/png' });
 
-    assert.deepEqual(await list(path.join(baseDir, '17331')), ['comm_address_proof.jpg', 'comm_address_proof_2.jpg']);
+    assert.deepEqual(await list(documentDir), ['MRU_17331_1_new.pdf', 'MRU_17331_2_bank.jpg']);
+    assert.deepEqual(await list(photoDir), ['MPU_17331_me2.png']);
   } finally {
     await cleanup();
   }
 });
 
-test('a hostile name cannot climb out of the base folder', async () => {
-  const { baseDir, accounts, save, cleanup } = await setup();
+test('another member whose id starts the same way is never touched', async () => {
+  const { photoDir, documentDir, accounts, save, cleanup } = await setup();
   try {
-    accounts.set('17331', { AccountName: '../../etc/passwd' });
-    const written = await save({ docType: 'PAN' });
+    accounts.set('1733', INDIVIDUAL);
+    await save({ docType: 'PAN', originalName: 'a.jpg' });
+    await save({ docType: 'PROFILE_PHOTO', originalName: 'a.jpg' });
+    await save({ accountId: '1733', docType: 'PAN', originalName: 'b.jpg' });
+    await save({ accountId: '1733', docType: 'PROFILE_PHOTO', originalName: 'b.jpg' });
 
-    assert.deepEqual(await list(baseDir), ['etc_passwd_17331']);
-    assert.ok(path.resolve(written).startsWith(path.resolve(baseDir) + path.sep));
+    assert.deepEqual(await list(documentDir), ['MRU_17331_1_a.jpg', 'MRU_1733_1_b.jpg']);
+    assert.deepEqual(await list(photoDir), ['MPU_17331_a.jpg', 'MPU_1733_b.jpg']);
   } finally {
     await cleanup();
   }
 });
 
-test('a non-numeric accountId is refused rather than used as a folder name', async () => {
+test('slots named by docType where one extends the other never replace each other', async () => {
+  const { documentDir, accounts, save, cleanup } = await setup();
+  try {
+    accounts.delete('17331');
+    await save({ docType: 'COMM_ADDRESS_PROOF', originalName: 'one.jpg' });
+    await save({ docType: 'COMM_ADDRESS_PROOF_2', originalName: 'two.jpg' });
+    await save({ docType: 'COMM_ADDRESS_PROOF', originalName: 'three.jpg' });
+
+    assert.deepEqual(await list(documentDir), ['MRU_17331_COMM_ADDRESS_PROOF_2_two.jpg', 'MRU_17331_COMM_ADDRESS_PROOF_three.jpg']);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('characters a file system cannot hold are replaced and a path in the name cannot escape', async () => {
+  const { documentDir, save, cleanup } = await setup();
+  try {
+    const written = await save({ docType: 'PAN', originalName: '..\\..\\etc/pa:ss*?.jpg' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_1_pa_ss__.jpg']);
+    assert.ok(path.resolve(written).startsWith(path.resolve(documentDir) + path.sep));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('no uploaded name falls back to the docType and the MIME type', async () => {
+  const { documentDir, save, cleanup } = await setup();
+  try {
+    await save({ docType: 'PAN', originalName: '', mimeType: 'image/png' });
+    assert.deepEqual(await list(documentDir), ['MRU_17331_1_pan.png']);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a very long name is cut but keeps its extension', async () => {
+  const { documentDir, save, cleanup } = await setup();
+  try {
+    await save({ docType: 'PAN', originalName: `${'x'.repeat(300)}.jpg` });
+    const [name] = await list(documentDir);
+    assert.equal(name.length, 200);
+    assert.ok(name.startsWith('MRU_17331_1_') && name.endsWith('.jpg'));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a non-numeric accountId is refused rather than used in a file name', async () => {
   const { save, cleanup } = await setup();
   try {
     await assert.rejects(save({ accountId: '../x' }));
@@ -127,24 +182,9 @@ test('a non-numeric accountId is refused rather than used as a folder name', asy
   }
 });
 
-test('a missing extension falls back to the MIME type', async () => {
-  const { baseDir, save, cleanup } = await setup();
-  try {
-    await save({ docType: 'PAN', originalName: 'scan', mimeType: 'image/png' });
-    assert.deepEqual(await list(path.join(baseDir, '17331')), ['pan_card.png']);
-  } finally {
-    await cleanup();
-  }
-});
-
-test('a blank base folder turns the copy off', async () => {
-  const storage = createDocumentStorage({ baseDir: '', findAccount: async () => null });
-  const written = await storage.saveMemberDocument({
-    accountId: '17331',
-    docType: 'PAN',
-    buffer: Buffer.from('file'),
-    originalName: 'scan.jpg',
-    mimeType: 'image/jpeg',
-  });
-  assert.equal(written, null);
+test('a blank folder turns that copy off', async () => {
+  const storage = createDocumentStorage({ photoDir: '', documentDir: ' ', findAccount: async () => INDIVIDUAL });
+  const base = { accountId: '17331', buffer: Buffer.from('file'), originalName: 'scan.jpg', mimeType: 'image/jpeg' };
+  assert.equal(await storage.saveMemberDocument({ ...base, docType: 'PAN' }), null);
+  assert.equal(await storage.saveMemberDocument({ ...base, docType: 'PROFILE_PHOTO' }), null);
 });
