@@ -339,6 +339,9 @@ overwritten. `Detail3`–`Detail8`, `Detail11`, `Detail12` remain unmapped/unuse
 token mechanism) and then calls the conversation endpoints with `Authorization: Bearer <token>` —
 reusing `authenticate` unchanged. `registrationEngine.startChat` feeds `token` + `registrationId`
 in as Typebot `prefilledVariables`, which is how the relay knows whose registration it is.
+`/auth/send-otp` also waits per number: the same canonical phone is refused with "Please wait N seconds before
+requesting another OTP." (`details.retryAfterSeconds`, code `OTP_COOLDOWN`) for `PHONE_OTP_RESEND_COOLDOWN_SECONDS`
+(default 60, 0 = off) after a successful send. In memory in `auth.service.js`, so a restart clears it.
 Every service function additionally calls `assertOwnRegistration(userId, registrationId)`
 (in `registration.service.js`), which 403s if the path param doesn't match `req.user.id` — the id
 alone is never sufficient to touch another user's registration.
