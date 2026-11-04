@@ -24,6 +24,15 @@ export const verifyOtp = async (req, res, next) => {
   }
 };
 
+export const trustedLogin = async (req, res, next) => {
+  try {
+    const result = await authService.signInTrustedPhone({ ...req.body, ip: req.body.ip ?? req.ip });
+    return ok(res, { data: result });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 export const logout = async (req, res, next) => {
   try {
     const token = req.headers.authorization.slice('Bearer '.length).trim();

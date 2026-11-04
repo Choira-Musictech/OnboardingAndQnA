@@ -82,6 +82,17 @@ export function createAuthService({
     const valid = await otpProvider.verify({ phone: canonicalPhone, otp });
     if (!valid) throw badRequestError('Invalid or expired OTP', { errorCode: 'INVALID_OTP' });
 
+    return signInVerifiedPhone(canonicalPhone, { ip, guid });
+  }
+
+  // For trusted channel services (the WhatsApp service) that have already proven the number is the
+  // member's - WhatsApp delivers it from the authenticated sender - so there is no OTP step. Same
+  // find-or-create and token as verifyOtp. Callers must be authenticated with SERVICE_API_KEY.
+  async function signInTrustedPhone({ phone, ip, guid }) {
+    return signInVerifiedPhone(toCanonicalPhone(phone), { ip, guid });
+  }
+
+  async function signInVerifiedPhone(canonicalPhone, { ip, guid }) {
     let user = await userRepository.findByAccountMobile(canonicalPhone);
     if (!user) {
       try {
@@ -136,7 +147,7 @@ export function createAuthService({
     return tokenBlacklist.has(jti);
   }
 
-  return { sendOtp, verifyOtp, logout, isTokenBlacklisted };
+  return { sendOtp, verifyOtp, signInTrustedPhone, logout, isTokenBlacklisted };
 }
 
 // ApplicationStatus 1 = fully registered, everything else = onboarding.
