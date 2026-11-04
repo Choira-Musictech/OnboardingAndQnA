@@ -23,6 +23,15 @@ export const verifyOtpSchema = z.object({
   }),
 });
 
+// Channel services (WhatsApp) log a member in by a number they have already verified themselves.
+export const trustedLoginSchema = z.object({
+  body: z.object({
+    phone: phoneSchema,
+    ip: z.string().max(64).optional(),
+    guid: z.string().max(50).optional(),
+  }),
+});
+
 const emailSchema = z.string().email('Must be a valid email');
 
 export const sendEmailOtpSchema = z.object({
