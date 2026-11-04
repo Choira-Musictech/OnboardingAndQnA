@@ -117,6 +117,13 @@ const envSchema = z.object({
   GOOGLE_TRANSLATE_API_KEY: z.string().optional(),
   GOOGLE_TRANSLATE_TOKEN: z.string().optional(),
 
+  // Shared secret for trusted channel services (the WhatsApp service) calling POST /auth/trusted-login,
+  // sent as X-Service-Key. Unset = that endpoint is disabled (404).
+  SERVICE_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(16, 'SERVICE_API_KEY must be at least 16 characters').optional(),
+  ),
+
   DEFAULT_REGISTRATION_STATUS: z.string().default('started'),
   REGISTRATION_TOTAL_STEPS: z.coerce.number().int().positive().default(10),
 
