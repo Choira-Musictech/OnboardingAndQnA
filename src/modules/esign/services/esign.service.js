@@ -138,7 +138,6 @@ async function start(userId, { ip } = {}) {
         clientUserId: String(userId),
         returnUrl: returnUrlFor(latest.ESignId, provider),
       });
-      await esignRepository.updateSigning(latest.ESignId, { SigningUrl: signingUrl });
       return { status: ESIGN_STATUS.INITIATED, signingUrl };
     }
   }
@@ -189,7 +188,9 @@ async function start(userId, { ip } = {}) {
     await esignRepository.updateSigning(eSignId, {
       ProviderRefId: started.workflowId,
       DocumentId: started.documentId,
-      SigningUrl: started.url,
+      // Only eMudhra's link is reused later. DocuSign's is one-time, a new one is made each time, and it
+      // is longer than the column holds (a DocuSign link made saving fail with P2000).
+      SigningUrl: provider === ESIGN_PROVIDERS.EMSIGNER ? started.url : null,
       UnsignedPdfPath: unsignedPdfPath,
       ResponseJson: JSON.stringify(started.raw),
     });

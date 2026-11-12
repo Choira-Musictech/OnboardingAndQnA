@@ -232,6 +232,7 @@ test('NRI members (NI / NC) sign with DocuSign, as an embedded signer with our r
     assert.deepEqual(result, { status: 'INITIATED', signingUrl: 'https://docusign.example/view-1' });
     assert.equal(rows[0].Provider, 'DOCUSIGN');
     assert.equal(rows[0].ProviderRefId, 'env-1');
+    assert.ok(!rows[0].SigningUrl, 'a one-time DocuSign link is not stored');
     const [input] = docuSign.started;
     assert.equal(input.returnUrl, 'https://backend.example/esign/docusign/return?esign=1');
     assert.equal(input.clientUserId, '20490');
@@ -252,7 +253,7 @@ test('an unfinished DocuSign envelope gets a fresh link, not a second envelope',
   assert.equal(docuSign.links[0].envelopeId, 'env-1');
   assert.equal(docuSign.links[0].clientUserId, '20490', 'the link is for the same embedded signer');
   assert.deepEqual(again, { status: 'INITIATED', signingUrl: 'https://docusign.example/view-2' });
-  assert.equal(rows[0].SigningUrl, 'https://docusign.example/view-2');
+  assert.ok(!rows[0].SigningUrl, 'a one-time DocuSign link is not stored, it can be longer than the column');
 });
 
 test('the DocuSign return is checked with DocuSign: completed saves the signed form, declined fails', async () => {
