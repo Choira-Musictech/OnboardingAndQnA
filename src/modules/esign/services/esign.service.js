@@ -1,24 +1,27 @@
 // ==================================================================
-// E-signing of the member's application form - review -> sign -> payment.
+// E-signing of the member's application form - review -> payment -> sign -> registration complete.
 //
-// Who signs with what (IPRS's own routing): AccountRegType I / C (Indian individual / company)
-// sign with eMudhra emSigner Aadhaar eSign; NI / NC (NRI) sign with DocuSign embedded signing.
+// Who signs with what: see esignPolicy.js (Indian members eMudhra Aadhaar eSign, NRI DocuSign).
 //
 // Rules this service keeps (from IPRS's integration guide):
 //   - The App_Accounts_ESign row exists BEFORE the member is sent to the provider, and the return
 //     URL carries that row's id - a return is only ever matched to a row we created.
 //   - A return is never trusted as proof. The provider is asked for the workflow status, and only
 //     "Completed" downloads the signed PDF and marks the row COMPLETED.
-//   - Payment waits for a COMPLETED row (see isSigned(), used by the chat gate and payment.service).
+//   - The member signs after paying. The registration completes only once there is a COMPLETED
+//     row (registration.service.js's complete() checks it), and refresh() completes it right then.
 // ==================================================================
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../../../config/env.js';
-import { appError, badRequestError, conflictError, notFoundError } from '../../../shared/errors.js';
+import { appError, badRequestError, conflictError, forbiddenError, notFoundError } from '../../../shared/errors.js';
 import { logger } from '../../../utils/logger.js';
 import { registrationRepository } from '../../registration/repositories/registration.repository.js';
-import { REG_TYPES } from '../../registration/services/memberRoleCodes.js';
+import { registrationService } from '../../registration/services/registration.service.js';
+import { paymentRepository } from '../../payment/repositories/payment.repository.js';
+import { conversationJournalService } from '../../conversation/services/conversationJournal.service.js';
+import { typebotSessionStore } from '../../conversation/services/typebot/typebotSessionStore.js';
 import { esignRepository } from '../repositories/esign.repository.js';
 import { SIGNATURE_BOX } from '../templates/applicationForm.js';
 import { applicationPdfService } from './applicationPdf.service.js';
@@ -26,8 +29,9 @@ import { SIGNED_APPLICATION_DOCUMENT } from './applicationData.service.js';
 import { docuSignClient } from './docusign.client.js';
 import { emSignerClient } from './emsigner.client.js';
 import { DECLARATION_BOX, signatureBoxesFor } from './signaturePlacement.js';
+import { ESIGN_PROVIDERS, esignPolicy } from './esignPolicy.js';
 
-export const ESIGN_PROVIDERS = Object.freeze({ EMSIGNER: 'EMSIGNER', DOCUSIGN: 'DOCUSIGN' });
+export { ESIGN_PROVIDERS };
 export const ESIGN_STATUS = Object.freeze({ INITIATED: 'INITIATED', COMPLETED: 'COMPLETED', FAILED: 'FAILED' });
 
 // Provider statuses that mean the member can no longer sign this workflow / envelope
@@ -38,13 +42,6 @@ const DEAD_STATUSES = ['recalled', 'expired', 'rejected', 'declined', 'voided'];
 // (DocuSign links work once, so an unfinished envelope always gets a fresh link instead.)
 const REUSE_OPEN_SIGNING_MS = 30 * 60_000;
 
-const PROVIDER_BY_REG_TYPE = Object.freeze({
-  [REG_TYPES.INDIVIDUAL]: ESIGN_PROVIDERS.EMSIGNER,
-  [REG_TYPES.PUBLISHER]: ESIGN_PROVIDERS.EMSIGNER,
-  [REG_TYPES.NRI_INDIVIDUAL]: ESIGN_PROVIDERS.DOCUSIGN,
-  [REG_TYPES.NRI_PUBLISHER]: ESIGN_PROVIDERS.DOCUSIGN,
-});
-
 // Swappable in tests, same technique verifyGate.js's verifyProvider export uses.
 export const esignProviders = { emSigner: emSignerClient, docuSign: docuSignClient };
 
@@ -53,7 +50,7 @@ function clientFor(provider) {
 }
 
 function providerFor(account) {
-  return PROVIDER_BY_REG_TYPE[String(account?.AccountRegType ?? '').trim()] ?? null;
+  return esignPolicy.providerFor(account);
 }
 
 /** Which provider this member signs with (null when e-signing does not apply to them). */
@@ -61,9 +58,9 @@ async function providerForUser(userId) {
   return providerFor(await registrationRepository.findByAccountId(userId));
 }
 
-/** Whether this member must sign before paying. */
+/** Whether this member must sign (after paying) before the registration can complete. */
 function isRequiredFor(account) {
-  return env.ESIGN_ENABLED && providerFor(account) !== null;
+  return esignPolicy.isRequiredFor(account);
 }
 
 async function isRequired(userId) {
@@ -71,7 +68,23 @@ async function isRequired(userId) {
 }
 
 async function isSigned(userId) {
-  return esignRepository.hasCompletedSigning(userId);
+  return esignPolicy.isSigned(userId);
+}
+
+// The signature was the last thing missing (the member pays first), so the registration completes
+// here: ApplicationStatus 1 and the completion emails. Best-effort - the signature is already saved,
+// and anything else still missing is left for the chat / support, never thrown at the provider return.
+async function completeRegistration(accountId) {
+  const userId = String(accountId);
+  try {
+    await registrationService.complete(userId, userId);
+    logger.info({ userId }, 'Registration completed on signing');
+    // Same cleanup as the payment callback: the member's chat is done, the journal is not needed.
+    typebotSessionStore.clear(userId);
+    await conversationJournalService.clearJournal(userId);
+  } catch (err) {
+    logger.warn({ userId, err: err.message, missing: err.details?.missing }, 'Signed, but the registration could not be completed yet');
+  }
 }
 
 // PDFs live under ESIGN_STORAGE_DIR/<AccountId>/; the stored path is relative to the backend folder.
@@ -131,6 +144,12 @@ async function start(userId, { ip } = {}) {
   if (!provider) throw badRequestError('E-signing is not available for this membership type yet');
 
   if (await esignRepository.hasCompletedSigning(userId)) return { status: ESIGN_STATUS.COMPLETED, signingUrl: null };
+
+  // Payment -> sign: the chat only shows the sign card once the fee is paid; this is the same rule
+  // where the signing (and the provider's credits) actually starts.
+  if (!(await paymentRepository.hasSuccessfulPayment(userId))) {
+    throw forbiddenError('Please pay the application fee before signing', { errorCode: 'PAYMENT_REQUIRED' });
+  }
 
   const signerEmail = String(account.AccountEmail ?? '').trim();
   if (!signerEmail) throw badRequestError('An email address is needed before signing');
@@ -240,12 +259,14 @@ async function refresh(row) {
       createdBy: account?.AccountName?.trim() || null,
     });
     logger.info({ accountId: String(row.AccountId), eSignId: String(row.ESignId) }, 'E-signing completed');
-    return esignRepository.updateSigning(row.ESignId, {
+    const completed = await esignRepository.updateSigning(row.ESignId, {
       Status: ESIGN_STATUS.COMPLETED,
       SignedPdfPath: signedPdfPath,
       CompletedDate: new Date(),
       ResponseJson: JSON.stringify(raw),
     });
+    await completeRegistration(row.AccountId);
+    return completed;
   }
 
   if (DEAD_STATUSES.includes(normalized)) {

@@ -1,12 +1,13 @@
 // ==================================================================
-// Holds the payment button until the member has e-signed their application form.
+// Asks a member who has paid to e-sign their application form.
 //
-// Order at the end of the flow: review -> sign -> payment. Typebot itself knows nothing about
-// signing - it offers the payment button as before (see paymentGate.js). When signing is required
-// and not done yet, the engine keeps showing the review, adds the "please sign" message and marks
-// the response `signRequired: true`; the frontend then shows the sign card instead of the payment
-// button. payment.service.js refuses /payment/initiate on its own as well, so the order holds even
-// for a client that ignores the flag.
+// Order at the end of the flow: review -> payment -> sign -> registration complete. Typebot itself
+// knows nothing about signing - it offers the payment button as before (see paymentGate.js). Once
+// the fee is paid and signing is required but not done, the engine adds the "please sign" message
+// and marks the response `signRequired: true`; the frontend then shows the sign card in place of the
+// payment button. esign.service.js refuses to start a signing before payment on its own as well, and
+// registration.service.js's complete() waits for the signature, so the order holds even for a client
+// that ignores the flag.
 //
 // Whether signing is needed and done is read from the database (esign.service.js), so a member who
 // logs out halfway and comes back lands on the right step.
@@ -66,17 +67,12 @@ export async function signProviderFor(userId) {
 // The wording names how they will sign: Aadhaar OTP for Indian members, DocuSign for NRI members.
 export function describeSignRequired(provider) {
   if (provider === 'DOCUSIGN') {
-    return 'Please sign your application before payment. Tap "Sign application" to review the form and sign it online with DocuSign.';
+    return 'Your payment has been received. Please sign your application to complete your registration. Tap "Sign application" to review the form and sign it online with DocuSign.';
   }
-  return 'Please sign your application before payment. Tap "Sign application" to review the form and sign it with your Aadhaar OTP.';
-}
-
-// Shown under the review once the signature is in and only the payment is left.
-export function describeSignDone() {
-  return 'Your application is signed. Check your details above, then tap "Pay Application Fee" to complete your registration.';
+  return 'Your payment has been received. Please sign your application to complete your registration. Tap "Sign application" to review the form and sign it with your Aadhaar OTP.';
 }
 
 // Shown when the member types into the chat while the signature is still pending.
 export function describeSignPending() {
-  return "Your application isn't signed yet. Please tap \"Sign application\" to sign it - payment opens right after.";
+  return "Your application isn't signed yet. Please tap \"Sign application\" to sign it - that completes your registration.";
 }

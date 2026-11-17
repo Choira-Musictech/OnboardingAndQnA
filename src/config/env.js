@@ -206,8 +206,8 @@ const envSchema = z.object({
   PAYU_FAILURE_URL: z.string().optional(),
   PAYU_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
-  /* E-sign of the application form, between the pre-payment review and payment */
-  // Off by default: with it off the chat goes from review straight to payment, as before.
+  /* E-sign of the application form, after payment: review -> payment -> sign -> complete */
+  // Off by default: with it off, payment completes the registration, as before.
   // Same string shape as OCR_ENABLED - z.coerce.boolean() would treat "false" as true.
   ESIGN_ENABLED: z
     .string()

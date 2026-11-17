@@ -25,6 +25,9 @@ const { needsSignature } = await import('../src/modules/conversation/services/ty
 const { paymentService } = await import('../src/modules/payment/services/payment.service.js');
 const { userRepository } = await import('../src/modules/user/repositories/user.repository.js');
 const { paymentRepository } = await import('../src/modules/payment/repositories/payment.repository.js');
+const { registrationService } = await import('../src/modules/registration/services/registration.service.js');
+const { conversationJournalService } = await import('../src/modules/conversation/services/conversationJournal.service.js');
+const { typebotSessionStore } = await import('../src/modules/conversation/services/typebot/typebotSessionStore.js');
 
 // --- emSigner client -------------------------------------------------------
 
@@ -133,11 +136,24 @@ let rows;
 let provider;
 let docuSign;
 let savedDocuments;
+let completions;
+let clearedJournals;
 
 beforeEach(() => {
   account = { AccountId: 20490n, AccountRegType: 'I', AccountEmail: 'member@example.com', AccountName: 'Test Member' };
   rows = [];
   savedDocuments = [];
+  completions = [];
+  clearedJournals = [];
+  // Review -> payment -> sign: the member has paid by the time they sign.
+  paymentRepository.hasSuccessfulPayment = async () => true;
+  registrationService.complete = async (userId) => {
+    completions.push(String(userId));
+    return { completed: true };
+  };
+  conversationJournalService.clearJournal = async (userId) => {
+    clearedJournals.push(String(userId));
+  };
   provider = {
     started: [],
     status: 'Pending',
@@ -301,6 +317,33 @@ test('the return is checked with emSigner: pending stays open, completed saves t
   assert.ok(fs.readFileSync(path.resolve(rows[0].SignedPdfPath)).toString().startsWith('%PDF signed'));
   assert.equal(savedDocuments[0].caption, 'SIGNED_APPLICATION');
   assert.equal(await esignService.isSigned('20490'), true);
+  // The signature was the last step: the registration completes and the chat's journal goes.
+  assert.deepEqual(completions, ['20490']);
+  assert.deepEqual(clearedJournals, ['20490']);
+});
+
+test('a still-pending signing does not complete the registration', async () => {
+  await esignService.start('20490');
+  assert.equal(await esignService.handleProviderReturn('1'), 'INITIATED');
+  assert.deepEqual(completions, []);
+});
+
+test('signing that cannot complete the registration yet is still saved, and the journal is kept', async () => {
+  registrationService.complete = async () => {
+    throw Object.assign(new Error('Registration incomplete: missing payment'), {
+      errorCode: 'REGISTRATION_INCOMPLETE',
+      details: { missing: ['payment'] },
+    });
+  };
+  typebotSessionStore.set('20490', { sessionId: 's1', input: { id: 'x' } });
+  await esignService.start('20490');
+  provider.status = 'Completed';
+
+  assert.equal(await esignService.handleProviderReturn('1'), 'COMPLETED');
+  assert.equal(rows[0].Status, 'COMPLETED');
+  assert.deepEqual(clearedJournals, []);
+  assert.ok(typebotSessionStore.get('20490'), 'the chat session is kept');
+  typebotSessionStore.clear('20490');
 });
 
 test('an expired workflow becomes FAILED so the member can start again', async () => {
@@ -347,14 +390,38 @@ test('the chat asks for a signature only while the member has not signed - India
   }
 });
 
-test('payment cannot start before the application is signed - Indian or NRI', async () => {
+test('signing cannot start before the fee is paid - Indian or NRI', async () => {
   paymentRepository.hasSuccessfulPayment = async () => false;
   for (const regType of ['I', 'NI']) {
-    userRepository.findById = async () => ({ ...account, AccountRegType: regType });
+    rows = [];
+    account.AccountRegType = regType;
     await assert.rejects(
-      paymentService.initiatePayment({ userId: '20490' }),
-      (err) => err.errorCode === 'ESIGN_REQUIRED' && err.statusCode === 403,
+      esignService.start('20490'),
+      (err) => err.errorCode === 'PAYMENT_REQUIRED' && err.statusCode === 403,
       regType,
     );
+    assert.equal(rows.length, 0, `${regType}: nothing is recorded or sent to the provider`);
+  }
+  assert.equal(provider.started.length + docuSign.started.length, 0);
+});
+
+test('payment starts before the application is signed - Indian or NRI', async () => {
+  paymentRepository.hasSuccessfulPayment = async () => false;
+  const created = [];
+  const { createResult } = paymentRepository;
+  paymentRepository.createResult = async (row) => {
+    created.push(row);
+    return row;
+  };
+  try {
+    for (const regType of ['I', 'NI']) {
+      userRepository.findById = async () => ({ ...account, AccountRegType: regType });
+      const started = await paymentService.initiatePayment({ userId: '20490' });
+      assert.ok(started.txnId && started.hash, `${regType}: checkout is handed out`);
+    }
+    assert.equal(created.length, 2);
+    assert.equal(rows.length, 0, 'no signing exists, and none is needed to pay');
+  } finally {
+    paymentRepository.createResult = createResult;
   }
 });
