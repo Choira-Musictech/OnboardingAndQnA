@@ -62,7 +62,10 @@ const SIGN_INPUT = {
   redirectUrl: 'https://backend.example/esign/emsigner/return?esign=1',
   documentName: 'IPRS-Application-1.pdf',
   pdf: Buffer.from('%PDF-1.4 test'),
-  signatureBox: { page: 3, left: 397, top: 425, width: 164, height: 62, pageHeight: 842 },
+  signatureBoxes: [
+    { page: 3, left: 397, top: 425, width: 164, height: 62, pageHeight: 842 },
+    { page: 5, left: 398, top: 306, width: 164, height: 62, pageHeight: 842 },
+  ],
 };
 
 test('emSigner: authorizes once, then signs with the bearer token and the Aadhaar mode', async () => {
@@ -87,9 +90,10 @@ test('emSigner: authorizes once, then signs with the bearer token and the Aadhaa
   assert.equal(initiate.body.RedirectURL, SIGN_INPUT.redirectUrl);
   const [doc] = initiate.body.lstDocumentDetails;
   assert.equal(Buffer.from(doc.FileData, 'base64').toString(), '%PDF-1.4 test');
-  assert.deepEqual(doc.ControlDetails[0], {
-    controlID: 4, page: 'Specify', pageNo: '3', left: 397, top: 417, width: 561, height: 355, assignedTo: 1, SignerType: 1,
-  }, 'the box is sent as two corners measured from the bottom of the page');
+  assert.deepEqual(doc.ControlDetails, [
+    { controlID: 4, page: 'Specify', pageNo: '3', left: 397, top: 417, width: 561, height: 355, assignedTo: 1, SignerType: 1, placeHolder: ' ' },
+    { controlID: 4, page: 'Specify', pageNo: '5', left: 398, top: 536, width: 562, height: 474, assignedTo: 1, SignerType: 1, placeHolder: ' ' },
+  ], 'one control per box, all for the one signer, each sent as two corners measured from the bottom of the page');
 });
 
 test('emSigner: refused credentials and a refused signing are reported as provider errors', async () => {
@@ -201,7 +205,8 @@ test('starting a signing records it first, then sends the member to emSigner wit
   assert.equal(rows[0].Provider, 'EMSIGNER');
   assert.equal(provider.started[0].redirectUrl, 'https://backend.example/esign/emsigner/return?esign=1');
   assert.equal(provider.started[0].signerEmail, 'member@example.com');
-  assert.equal(provider.started[0].signatureBox.page, 3);
+  // The stubbed PDF has no readable anchors, so only the fixed declaration box is sent.
+  assert.deepEqual(provider.started[0].signatureBoxes.map((box) => box.page), [3]);
   assert.ok(fs.existsSync(path.resolve(rows[0].UnsignedPdfPath)), 'the unsigned form is kept');
 });
 

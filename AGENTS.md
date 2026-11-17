@@ -561,8 +561,10 @@ document from each `REQUIRED_DOC_GROUPS` group (see "Typebot Registration Flow" 
     "pan.jpeg".
   - `POST /conversation/upload` is `multipart/form-data` (via `multer`, memory storage, limited by
     `MAX_UPLOAD_SIZE_MB`) — the only multipart endpoint in this app; everything else is JSON.
-  - **OCR-confirmation gate**: for OCR-eligible doc types (PAN/AADHAAR/BANK, and address-proof
-    uploads routed to DRIVING_LICENCE/VOTER_ID via `addressProofTypeMap.js`), `handleUpload()` does
+  - **OCR-confirmation gate**: for OCR-eligible doc types (`OCR_DOC_TYPES` in
+    `registration.service.js` - in the chat that is PAN, company PAN, BANK, PASSPORT, GST and
+    address-proof uploads routed to an OCR type via `addressProofTypeMap.js`; AADHAAR stays in the
+    list for the REST route only, the chat no longer asks for it), `handleUpload()` does
     *not* advance the conversation immediately after `saveDocument()`. If OCR extracted anything,
     it stores `{ ..., pendingDocConfirmation: { fileUrl } }` in `typebotSessionStore` and returns a
     message listing the extracted values (labeled per doc type — `OCR_FIELD_LABELS`, sourced from
@@ -645,10 +647,12 @@ which branch the member is on. The path cannot be reconstructed from `App_Accoun
   must never be reachable by a stray tap. A "start over" also calls `workLinkService.clearWorkLinks()`
   — work links are append-only with a hard cap, so keeping them would let a restarted member hit the
   5-link ceiling with one song. Documents and account fields are deliberately NOT cleared on restart.
-- **The resume answer tells them what's already on file.** `resumeFromJournal()` prepends a summary
-  (from `registrationReviewService.buildReview()`) and "We've restored as much of your earlier
-  registration as we could" when the flow diverged — build failures are logged and skipped, never
-  allowed to block the resume.
+- **A clean resume says nothing extra.** `resumeFromJournal()` redraws the member's own conversation
+  (`history`, with OCR cards and song details rebuilt from the DB by `withExtractedDetails` /
+  `withSongDetails`) and puts the next question under it. Only a replay that stopped early adds
+  "We've restored as much of your earlier registration as we could…" (`describeResumedPartially()`).
+  There is no `buildReview()` summary on resume any more - that review is shown only at the payment
+  step.
 
 Block ids survive a republish (checked after the 2026-09-09 publish: 0 of `progressMap.js`'s 131
 ids lost, all gate ids and the 7 OCR button labels intact), so journals normally stay valid across

@@ -250,10 +250,6 @@ async function buildApplicationData(userId, { signedAt = new Date(), ip, guid, f
       guid: orNA(guid ?? account.GUID),
       ip: orNA(ip ?? account.PublicIP),
       submittedDate: formatDateTime(signedAt),
-      signerName: accountName,
-      // NRI members sign with DocuSign (esign.service.js's PROVIDER_BY_REG_TYPE), which also wants a
-      // signature on the Work Notification page. Indian members keep the single eMudhra signature.
-      workPageSignature: !isIndianRegType(regType),
     },
 
     works: works.map(describeWork),

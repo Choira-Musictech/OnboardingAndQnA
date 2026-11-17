@@ -5,10 +5,12 @@
 // "PART n" section bars, underlined label/value rows, and a footer (member name, page x/n,
 // application number) added by Puppeteer's footer template.
 //
-// Page 3 is the declaration the member signs. Its height is fixed and the signature box sits at
-// a fixed position on it, so a signing provider can be told exactly where to put the signature
-// (SIGNATURE_BOX). The box also carries the text "sign_here" (invisible) for providers that place
-// signatures by anchor text instead of coordinates.
+// The member signs twice:
+//   - Page 3, the declaration. Its height is fixed and the signature box sits at a fixed position
+//     on it (SIGNATURE_BOX).
+//   - The Work Notification page, wherever the works table pushes it (workPageSignatureSlot).
+// Both spots carry the invisible text "sign_here": DocuSign places its tabs on that text, and
+// signaturePlacement.js finds it in the PDF to give eMudhra coordinates.
 // ==================================================================
 import fs from 'node:fs';
 
@@ -42,6 +44,19 @@ export const SIGNATURE_BOX = Object.freeze({
   // A4 height in points, for providers that measure from the bottom of the page.
   pageHeightPt: Math.round(297 * MM_TO_PT),
   anchorText: 'sign_here',
+});
+
+// The Work Notification page's signature slot (.sign-slot): the anchor text sits `anchorDrop` mm
+// below the slot's top, so DocuSign's tab (dropped at the anchor) lands low in the slot.
+const SIGN_SLOT_MM = Object.freeze({ height: SIGN_BOX_MM.height + 10, anchorDrop: 25 });
+
+// For coordinate-placed signatures (eMudhra) on that page: a box the size of the page-3 one, filling
+// the slot above its anchor. Measured from the anchor text's baseline, in PDF points.
+export const WORK_PAGE_SIGNATURE = Object.freeze({
+  width: SIGNATURE_BOX.pt.width,
+  height: SIGNATURE_BOX.pt.height,
+  // The box's bottom edge, this far above the anchor's baseline.
+  bottomAboveAnchor: Math.round(1 * MM_TO_PT),
 });
 
 export function escapeHtml(value) {
@@ -220,22 +235,14 @@ function worksTable(data) {
   return `<table class="works"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-// A second signature spot above the signer's name on the Work Notification page, for DocuSign only.
-// DocuSign puts a Sign Here tab on EVERY occurrence of the anchor text, so repeating the same
-// invisible text here is all it needs - and the slot sits in the normal flow, so the tab follows the
-// signer block wherever the works table pushes it. eMudhra places its one signature by coordinates on
-// page 3 and never sees this slot (Indian members do not get it).
-function workPageSignatureSlot(data) {
-  if (!data.signing.workPageSignature) return '';
+// The second signature spot, on the Work Notification page, in place of a typed signer name (both
+// providers' stamps print the signer's name). It sits in the normal flow, so it moves wherever the
+// works table pushes it:
+//   - DocuSign puts a Sign Here tab on EVERY occurrence of the anchor text, so this one is found too.
+//   - eMudhra places signatures by coordinates; signaturePlacement.js finds this anchor in the
+//     rendered PDF and turns it into a box (WORK_PAGE_SIGNATURE).
+function workPageSignatureSlot() {
   return `<div class="sign-slot"><span class="anchor">${SIGNATURE_BOX.anchorText}</span></div>`;
-}
-
-// Who signed, above the signing details. A DocuSign signature stamp already prints the signer's full
-// name, so it takes the name's place; without a signature here (eMudhra) the typed name stays.
-function workPageSignerBlock(data) {
-  return data.signing.workPageSignature
-    ? workPageSignatureSlot(data)
-    : `<p class="strong">${e(data.signing.signerName)}</p>`;
 }
 
 function worksPage(data) {
@@ -255,7 +262,7 @@ function worksPage(data) {
       </div>
       <div class="sign-row">
         <div><p>Date: ${e(data.signing.date)}</p></div>
-        <div class="sign-meta">${workPageSignerBlock(data)}${signingDetails(data)}</div>
+        <div class="sign-meta">${workPageSignatureSlot()}${signingDetails(data)}</div>
       </div>
     </section>`;
 }
@@ -306,8 +313,8 @@ const STYLES = `
   .sign-meta { text-align: right; }
   .sign-box { position: absolute; top: ${SIGN_BOX_MM.top}mm; left: ${SIGN_BOX_MM.left}mm; width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height}mm; }
   .sign-box .anchor, .sign-slot .anchor { color: #fff; font-size: 1pt; }
-  .sign-slot { width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_BOX_MM.height + 10}mm; margin: 7mm 0 0 auto; text-align: left; }
-  .sign-slot .anchor { display: block; padding-top: 25mm; }
+  .sign-slot { width: ${SIGN_BOX_MM.width}mm; height: ${SIGN_SLOT_MM.height}mm; margin: 7mm 0 0 auto; text-align: left; }
+  .sign-slot .anchor { display: block; padding-top: ${SIGN_SLOT_MM.anchorDrop}mm; }
   .date-place { position: absolute; top: ${SIGN_BOX_MM.top + 2}mm; left: 0; line-height: 1.8; }
   .sign-meta.under-box { position: absolute; top: ${SIGN_BOX_MM.top + SIGN_BOX_MM.height + 2}mm; right: 0; line-height: 1.8; }
   .approval { position: absolute; top: 205mm; left: 0; right: 0; text-align: center; font-weight: bold; }

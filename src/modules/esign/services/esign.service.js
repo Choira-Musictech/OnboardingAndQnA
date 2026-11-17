@@ -25,6 +25,7 @@ import { applicationPdfService } from './applicationPdf.service.js';
 import { SIGNED_APPLICATION_DOCUMENT } from './applicationData.service.js';
 import { docuSignClient } from './docusign.client.js';
 import { emSignerClient } from './emsigner.client.js';
+import { DECLARATION_BOX, signatureBoxesFor } from './signaturePlacement.js';
 
 export const ESIGN_PROVIDERS = Object.freeze({ EMSIGNER: 'EMSIGNER', DOCUSIGN: 'DOCUSIGN' });
 export const ESIGN_STATUS = Object.freeze({ INITIATED: 'INITIATED', COMPLETED: 'COMPLETED', FAILED: 'FAILED' });
@@ -80,6 +81,19 @@ async function savePdf(accountId, fileName, pdf) {
   await fs.mkdir(path.dirname(absolute), { recursive: true });
   await fs.writeFile(absolute, pdf);
   return relative.split(path.sep).join('/');
+}
+
+// The declaration box and the Work Notification page's box, like DocuSign's two tabs. If the second
+// cannot be located, the member still signs the declaration rather than not at all.
+async function emSignerBoxes(pdf, userId) {
+  try {
+    const boxes = await signatureBoxesFor(pdf);
+    if (boxes.length < 2) logger.warn({ userId }, 'Work Notification signature spot not found; signing the declaration only');
+    return boxes;
+  } catch (err) {
+    logger.warn({ userId, err: err.message }, 'Could not read the signature spots from the PDF; signing the declaration only');
+    return [DECLARATION_BOX];
+  }
 }
 
 function returnUrlFor(eSignId, provider) {
@@ -182,7 +196,7 @@ async function start(userId, { ip } = {}) {
             redirectUrl: returnUrl,
             documentName,
             pdf,
-            signatureBox: { page: SIGNATURE_BOX.page, ...SIGNATURE_BOX.pt, pageHeight: SIGNATURE_BOX.pageHeightPt },
+            signatureBoxes: await emSignerBoxes(pdf, userId),
           });
 
     await esignRepository.updateSigning(eSignId, {
