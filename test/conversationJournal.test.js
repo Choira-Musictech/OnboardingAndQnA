@@ -30,6 +30,7 @@ import { registrationReviewService } from '../src/modules/registration/services/
 import { registrationRepository } from '../src/modules/registration/repositories/registration.repository.js';
 import { workLinkService } from '../src/modules/work/services/workLink.service.js';
 import { esignService } from '../src/modules/esign/services/esign.service.js';
+import { paymentService } from '../src/modules/payment/services/payment.service.js';
 import { PAYMENT_BLOCK_IDS } from '../src/modules/conversation/services/typebot/paymentBlockIds.js';
 
 const PAYMENT_BLOCK = [...PAYMENT_BLOCK_IDS][0];
@@ -585,84 +586,88 @@ test('a resumed chat keeps the "Yes" the member gave to the extracted details', 
   assert.equal(history[at + 1].answer, 'Yes, confirm');
 });
 
-// Resuming onto the payment step must show the same review + signing notices the live relay does.
-for (const { signed, expectNotice, expectSignRequired } of [
-  { signed: false, expectNotice: /Please sign your application before payment/, expectSignRequired: true },
-  { signed: true, expectNotice: /Your application is signed/, expectSignRequired: false },
-]) {
-  test(`resuming onto the payment step shows the review and ${signed ? 'the signed note' : 'the signing request'}`, async (t) => {
-    if (!dbAvailable) return t.skip('SQL Server is not reachable');
-    const userId = await makeAccount();
-    await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
-
-    const realRequired = esignService.isRequired;
-    const realSigned = esignService.isSigned;
-    esignService.isRequired = async () => true;
-    esignService.isSigned = async () => signed;
-    const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
-    t.after(() => {
-      restoreClient();
-      esignService.isRequired = realRequired;
-      esignService.isSigned = realSigned;
-    });
-
-    // A signed member is resumed straight away; an unsigned one answers the continue prompt.
-    const first = await handle({ userId, token: 't' });
-    const resumed = signed ? first : await handle({ userId, token: 't', message: 'Continue where I left off' });
-
-    assert.equal(resumed.isPaymentStep, true);
-    assert.equal(resumed.signRequired, expectSignRequired);
-    assert.match(texts(resumed), expectNotice);
-    assert.ok(resumed.messages.some((m) => m.id === 'payment-review'), 'the review is shown');
+// Review -> payment -> sign. Resuming onto the payment step shows what the live relay does: the
+// review and the Pay button before paying, the signing request once paid.
+function stubPaymentAndSigning(t, { paid, required = true, signed = false, provider } = {}) {
+  const real = {
+    paid: paymentService.hasSuccessfulPayment,
+    required: esignService.isRequired,
+    signed: esignService.isSigned,
+    provider: esignService.providerForUser,
+  };
+  paymentService.hasSuccessfulPayment = async () => paid;
+  esignService.isRequired = async () => required;
+  esignService.isSigned = typeof signed === 'function' ? signed : async () => signed;
+  if (provider) esignService.providerForUser = async () => provider;
+  t.after(() => {
+    paymentService.hasSuccessfulPayment = real.paid;
+    esignService.isRequired = real.required;
+    esignService.isSigned = real.signed;
+    esignService.providerForUser = real.provider;
   });
 }
 
-test('when the signed-or-not lookup fails, the chat never claims the application is signed', async (t) => {
+test('resuming onto the payment step before paying shows the review and the Pay button, no signing yet', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');
   const userId = await makeAccount();
   await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
-
-  // e.g. the App_Accounts_ESign table is missing on this database.
-  const real = { required: esignService.isRequired, signed: esignService.isSigned };
-  esignService.isRequired = async () => true;
-  esignService.isSigned = async () => {
-    throw new Error('Invalid object name App_Accounts_ESign');
-  };
-  const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
-  t.after(() => {
-    restoreClient();
-    esignService.isRequired = real.required;
-    esignService.isSigned = real.signed;
-  });
+  stubPaymentAndSigning(t, { paid: false });
+  t.after(stubReplay(['b1', PAYMENT_BLOCK]));
 
   await handle({ userId, token: 't' });
   const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
 
   assert.equal(resumed.isPaymentStep, true);
-  assert.ok(resumed.messages.some((m) => m.id === 'payment-review'), 'the review is still shown');
-  assert.doesNotMatch(texts(resumed), /Your application is signed/);
-  assert.doesNotMatch(texts(resumed), /Please sign your application/);
+  assert.equal(resumed.signRequired, false, 'the Pay button shows, not the sign card');
+  assert.ok(resumed.messages.some((m) => m.id === 'payment-review'), 'the review is shown');
+  assert.doesNotMatch(texts(resumed), /sign your application/i);
 });
 
-test('an NRI member on the payment step is asked to sign with DocuSign, not Aadhaar', async (t) => {
+test('after paying, the member lands straight on the signing request - no continue/start-over prompt', async (t) => {
   if (!dbAvailable) return t.skip('SQL Server is not reachable');
   const userId = await makeAccount();
   await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+  stubPaymentAndSigning(t, { paid: true });
+  t.after(stubReplay(['b1', PAYMENT_BLOCK]));
 
-  const real = { required: esignService.isRequired, signed: esignService.isSigned, provider: esignService.providerForUser };
-  esignService.isRequired = async () => true;
-  esignService.isSigned = async () => false;
-  esignService.providerForUser = async () => 'DOCUSIGN';
-  const restoreClient = stubReplay(['b1', PAYMENT_BLOCK]);
-  t.after(() => {
-    restoreClient();
-    esignService.isRequired = real.required;
-    esignService.isSigned = real.signed;
-    esignService.providerForUser = real.provider;
+  // The PayU return reloads the chat with an empty start call.
+  const resumed = await handle({ userId, token: 't' });
+
+  assert.equal(resumed.isPaymentStep, true);
+  assert.equal(resumed.signRequired, true);
+  assert.match(texts(resumed), /Your payment has been received\. Please sign your application/);
+  assert.match(texts(resumed), /Aadhaar OTP/);
+  assert.ok(!resumed.messages.some((m) => m.id === 'payment-review'), 'the review was already seen before paying');
+});
+
+test('when the signed-or-not lookup fails after paying, the chat never claims anything about signing', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+  // e.g. the App_Accounts_ESign table is missing on this database.
+  stubPaymentAndSigning(t, {
+    paid: true,
+    signed: async () => {
+      throw new Error('Invalid object name App_Accounts_ESign');
+    },
   });
+  t.after(stubReplay(['b1', PAYMENT_BLOCK]));
 
-  await handle({ userId, token: 't' });
-  const resumed = await handle({ userId, token: 't', message: 'Continue where I left off' });
+  const resumed = await handle({ userId, token: 't' });
+
+  assert.equal(resumed.isPaymentStep, true);
+  assert.equal(resumed.signRequired, false);
+  assert.doesNotMatch(texts(resumed), /sign your application/i);
+});
+
+test('an NRI member who has paid is asked to sign with DocuSign, not Aadhaar', async (t) => {
+  if (!dbAvailable) return t.skip('SQL Server is not reachable');
+  const userId = await makeAccount();
+  await conversationJournalService.recordTurn({ userId, blockId: 'b1', answer: 'x' });
+  stubPaymentAndSigning(t, { paid: true, provider: 'DOCUSIGN' });
+  t.after(stubReplay(['b1', PAYMENT_BLOCK]));
+
+  const resumed = await handle({ userId, token: 't' });
 
   assert.equal(resumed.signRequired, true);
   assert.equal(resumed.signProvider, 'DOCUSIGN');

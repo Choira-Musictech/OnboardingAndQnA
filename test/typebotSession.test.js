@@ -26,6 +26,7 @@ import { typebotClient, isDeadSessionError } from '../src/modules/conversation/s
 import { typebotSessionStore } from '../src/modules/conversation/services/typebot/typebotSessionStore.js';
 import { handle, handleUpload } from '../src/modules/conversation/engines/registrationEngine.js';
 import { paymentService } from '../src/modules/payment/services/payment.service.js';
+import { esignService } from '../src/modules/esign/services/esign.service.js';
 import { prisma } from '../src/shared/prisma.js';
 
 // --- the real wire shapes --------------------------------------------------
@@ -227,10 +228,17 @@ const PARKED_BLOCK = {
   items: [{ id: 'x', content: 'Pay Application Fee' }],
 };
 
-function stubPaid(paid) {
-  const original = paymentService.hasSuccessfulPayment;
+// Signing is pinned too (default: not required), so these tests never depend on the local .env.
+function stubPaid(paid, { signRequired = false } = {}) {
+  const original = { paid: paymentService.hasSuccessfulPayment, required: esignService.isRequired, signed: esignService.isSigned };
   paymentService.hasSuccessfulPayment = async () => paid;
-  return () => { paymentService.hasSuccessfulPayment = original; };
+  esignService.isRequired = async () => signRequired;
+  esignService.isSigned = async () => false;
+  return () => {
+    paymentService.hasSuccessfulPayment = original.paid;
+    esignService.isRequired = original.required;
+    esignService.isSigned = original.signed;
+  };
 }
 
 test('typing at the payment button does not relay to Typebot when nothing has been paid', async () => {
@@ -252,9 +260,27 @@ test('typing at the payment button does not relay to Typebot when nothing has be
   }
 });
 
+test('typing at the payment button after paying, with the signature still to do, asks for the signature', async () => {
+  stubClient({ continueChat: () => { throw new Error('continueChat must not be called at the payment button'); } });
+  const restore = stubPaid(true, { signRequired: true });
+  typebotSessionStore.set(USER, { sessionId: 'live-session', input: PARKED_BLOCK });
+
+  try {
+    const res = await handle({ userId: USER, token: 't', message: 'done' });
+
+    assert.equal(calls.continueChat.length, 0);
+    assert.equal(res.sessionEnded, false);
+    assert.equal(res.signRequired, true, 'the sign card shows');
+    assert.match(texts(res), /isn't signed yet/);
+    assert.doesNotMatch(texts(res), /haven't received your payment/i);
+  } finally {
+    restore();
+  }
+});
+
 test('typing at the payment button after paying points the member at support, still without relaying', async () => {
-  // Only reachable when complete() is still refusing - a completed registration routes to the Q&A
-  // engine instead, so this member has paid but something required is missing.
+  // Only reachable when complete() is still refusing for something other than the signature - a
+  // completed registration routes to the Q&A engine instead.
   stubClient({ continueChat: () => { throw new Error('continueChat must not be called at the payment button'); } });
   const restore = stubPaid(true);
   typebotSessionStore.set(USER, { sessionId: 'live-session', input: PARKED_BLOCK });

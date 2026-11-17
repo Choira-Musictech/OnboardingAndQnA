@@ -21,7 +21,6 @@ import { registrationService } from '../../registration/services/registration.se
 import { conversationJournalService } from '../../conversation/services/conversationJournal.service.js';
 import { typebotSessionStore } from '../../conversation/services/typebot/typebotSessionStore.js';
 import { paymentRepository } from '../repositories/payment.repository.js';
-import { esignService } from '../../esign/services/esign.service.js';
 import { formatAmount, generatePayuHash, verifyPayuHash } from './payu/payu.utils.js';
 import { payuClient } from './payu/payu.client.js';
 import { resolveFee } from './payu/feeSchedule.js';
@@ -192,12 +191,6 @@ async function initiatePayment({ userId, productInfo, returnOrigin }) {
     });
   }
 
-  // Review -> sign -> payment. The chat hides the payment button until the application is signed
-  // (esignGate.js); this is the same rule enforced where the money actually starts moving.
-  if (esignService.isRequiredFor(account) && !(await esignService.isSigned(userId))) {
-    throw forbiddenError('Please sign your application before payment', { errorCode: 'ESIGN_REQUIRED' });
-  }
-
   const txnId = generateTxnId(userId);
   const formattedAmount = formatAmount(numAmount);
   const info = String(productInfo || 'IPRS Membership Onboarding Fee').trim();
@@ -332,11 +325,18 @@ async function handlePayuCallback(payuPayload) {
       typebotSessionStore.clear(userIdStr);
       await conversationJournalService.clearJournal(userIdStr);
     } catch (err) {
-      // Money has changed hands and the member is still not registered - that is not info-level.
-      logger.warn(
-        { userId: userIdStr, txnId, err: err.message },
-        'Payment succeeded but the registration could not be completed (documents or info still pending)',
-      );
+      // Payment -> sign -> complete: with only the signature left, this is the normal next step - the
+      // chat now shows the sign card and signing completes the registration (esign.service.js).
+      const missing = err.details?.missing ?? [];
+      if (missing.length === 1 && missing[0] === 'signature') {
+        logger.info({ userId: userIdStr, txnId }, 'Payment received; the registration completes once the member signs');
+      } else {
+        // Money has changed hands and the member is still not registered - that is not info-level.
+        logger.warn(
+          { userId: userIdStr, txnId, err: err.message },
+          'Payment succeeded but the registration could not be completed (documents or info still pending)',
+        );
+      }
     }
   }
 

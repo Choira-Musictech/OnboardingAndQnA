@@ -10,6 +10,7 @@ import { prisma } from '../../../shared/prisma.js';
 import { registrationRepository } from '../repositories/registration.repository.js';
 import { createOcrProvider } from './ocr/ocrProvider.factory.js';
 import { paymentRepository } from '../../payment/repositories/payment.repository.js';
+import { esignPolicy } from '../../esign/services/esignPolicy.js';
 import {
   PUBLISHER_ROLL_TYPE_ID_BY_REG_TYPE,
   resolveEntityType,
@@ -895,6 +896,11 @@ async function complete(userId, registrationId) {
   // registrationService to call complete() after a real PayU success, so importing the service back
   // would be circular - the repository has no such dependency.
   if (!(await paymentRepository.hasSuccessfulPayment(registrationId))) missing.push('payment');
+
+  // Payment -> sign -> complete: with e-signing on, the signed application is the last step, so a
+  // paid member is not registered (no ApplicationStatus 1, no completion emails) until they sign.
+  // esignPolicy, not esign.service, for the same circular-import reason as paymentRepository above.
+  if (esignPolicy.isRequiredFor(account) && !(await esignPolicy.isSigned(registrationId))) missing.push('signature');
 
   if (missing.length > 0) {
     throw badRequestError(`Registration incomplete: missing ${missing.join(', ')}`, {

@@ -9,15 +9,15 @@ import {
 } from '../src/modules/payment/services/payu/payu.utils.js';
 import { resolveFee, FEES_BY_REG_TYPE } from '../src/modules/payment/services/payu/feeSchedule.js';
 import { registrationEmailService } from '../src/modules/registration/services/registrationEmail.service.js';
-import { esignService } from '../src/modules/esign/services/esign.service.js';
+import { esignPolicy } from '../src/modules/esign/services/esignPolicy.js';
 
 // The DB-backed tests below complete real registrations, and complete() emails IPRS and the member
 // on the first transition - a test run must never send real mail.
 registrationEmailService.sendCompletionEmails = async () => {};
 
 // These tests are about payment itself, so they must not depend on whether the local .env turns
-// e-signing on; the sign-before-payment rule has its own tests in esign.test.js.
-esignService.isRequiredFor = () => false;
+// e-signing on; the payment -> sign -> complete order has its own tests (below and in esign.test.js).
+esignPolicy.isRequiredFor = () => false;
 
 async function makeAccount({ regType, email, name = 'PayU Tester' } = {}) {
   const { prisma } = await import('../src/shared/prisma.js');
@@ -593,6 +593,48 @@ test('registrationService.complete() refuses to finish a registration with no su
     const account = await prisma.appAccounts.findUnique({ where: { AccountId: BigInt(userId) } });
     assert.equal(account.ApplicationStatus, 1);
   } finally {
+    await deleteAccount(userId);
+  }
+});
+
+test('with e-signing on, a paid registration completes only once the application is signed', async () => {
+  const { prisma } = await import('../src/shared/prisma.js');
+  const { registrationService } = await import('../src/modules/registration/services/registration.service.js');
+
+  const userId = await makeAccount({ regType: 'I', email: `payu.sign.${Date.now()}@example.com` });
+  const { isRequiredFor, isSigned } = esignPolicy;
+  let signed = false;
+  esignPolicy.isRequiredFor = () => true;
+  esignPolicy.isSigned = async () => signed;
+
+  try {
+    await prisma.appAccountsDoc.createMany({
+      data: [
+        { AccountId: BigInt(userId), DocumentName: 'PAN', DocumentCaption: 'https://example.com/pan.jpg' },
+        { AccountId: BigInt(userId), DocumentName: 'BANK', DocumentCaption: 'https://example.com/bank.jpg' },
+        { AccountId: BigInt(userId), DocumentName: 'PERMANENT_ADDRESS_PROOF', DocumentCaption: 'https://example.com/a.jpg' },
+      ],
+    });
+    await prisma.appAccountsRegPayment.create({
+      data: { AccountId: BigInt(userId), TransactionNo: `TXN_SIGN_${userId}`, PaymentAmount: 1200, PaymentStatus: 0 },
+    });
+
+    // Paid, not signed: the signature is the one thing missing.
+    await assert.rejects(() => registrationService.complete(userId, userId), (err) => {
+      assert.equal(err.errorCode, 'REGISTRATION_INCOMPLETE');
+      assert.deepEqual(err.details?.missing, ['signature']);
+      return true;
+    });
+    let account = await prisma.appAccounts.findUnique({ where: { AccountId: BigInt(userId) } });
+    assert.notEqual(account.ApplicationStatus, 1, 'not registered before signing');
+
+    signed = true;
+    await registrationService.complete(userId, userId);
+    account = await prisma.appAccounts.findUnique({ where: { AccountId: BigInt(userId) } });
+    assert.equal(account.ApplicationStatus, 1);
+  } finally {
+    esignPolicy.isRequiredFor = isRequiredFor;
+    esignPolicy.isSigned = isSigned;
     await deleteAccount(userId);
   }
 });

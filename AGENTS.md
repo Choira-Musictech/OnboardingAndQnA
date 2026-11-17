@@ -841,6 +841,32 @@ callback, and the frontend's own success page is the closure. Three rules enforc
   left intact so the member can still resume, and the failure is logged at `warn`: money has changed
   hands and they are not registered.
 
+## E-signing and the payment order
+
+With `ESIGN_ENABLED=true` the end of the chat is **review → payment → e-sign → registration
+complete**. Indian members (I / C) sign with eMudhra Aadhaar eSign, NRI members (NI / NC) with
+DocuSign (`esign/services/esignPolicy.js`). With it off, payment completes the registration as before.
+
+- **Payment does not wait for a signature.** `initiatePayment()` has no e-sign check.
+- **Signing waits for payment.** `esign.service.start()` throws 403 `PAYMENT_REQUIRED` before a
+  SUCCESS payment exists, so no provider workflow (or credit) is spent on an unpaid member.
+- **`complete()` waits for the signature.** `registration.service.js` adds `'signature'` to `missing`
+  when `esignPolicy.isRequiredFor(account)` and there is no COMPLETED `App_Accounts_ESign` row. It
+  uses `esignPolicy` and `esignRepository`, not `esign.service`, because esign.service → PDF builder
+  → applicationData → registration.service would be circular.
+  - So the PayU callback's `complete()` refuses with `missing: ['signature']`. That is logged at
+    `info` and the session and journal stay.
+  - `esign.service`'s `refresh()` calls `complete()` the moment the provider confirms the signature,
+    then clears the session and journal, as the payment callback does. From then on the router
+    sends the member to `aiEngine`, which shows the one-time Thank-you card.
+- **The chat on the payment step** (`registrationEngine.js`):
+  - Before paying, it shows the review plus the Pay button, with `signRequired: false`.
+  - After paying, it shows only the "payment received, please sign" message, with
+    `signRequired: true` and `signProvider`. The frontend then shows the sign card in place of the
+    Pay button.
+  - A paid member is never offered "Start over" (`isApplicationConfirmed`), so the PayU return
+    lands straight on the sign step.
+
 ## Spotify Credit Verification
 
 `POST /spotify/metadata` (`modules/spotify/`, behind `authenticate`) — given `{ url, actualName,

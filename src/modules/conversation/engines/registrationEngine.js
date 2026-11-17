@@ -53,13 +53,10 @@ import {
   describePaymentReceived,
 } from '../services/typebot/paymentGate.js';
 import {
-  describeSignDone,
   describeSignPending,
   describeSignRequired,
   isApplicationSigned,
   needsSignature,
-  SIGNATURE_STATE,
-  signatureState,
   signProviderFor,
 } from '../services/typebot/esignGate.js';
 import { paymentService } from '../../payment/services/payment.service.js';
@@ -944,26 +941,51 @@ async function resumeFromJournal({ userId, token, carried = null, carriedWork = 
   };
 }
 
-// The payment step's reply: Typebot's own messages, then everything on file, then - review -> sign
-// -> payment - either the signing request (not signed yet, see esignGate.js) or a note that the
-// signature went through. Shared by the live relay and the resume path, which both can land here.
+// Review -> payment -> sign: true once the fee is paid and the application still has to be signed.
+// Never throws - a failed lookup claims nothing, and the Pay button stays as it was.
+async function awaitingSignature(userId) {
+  try {
+    if (!(await paymentService.hasSuccessfulPayment(userId))) return false;
+  } catch (err) {
+    logger.warn({ userId, err: err.message }, 'Could not check the payment before asking for a signature');
+    return false;
+  }
+  return needsSignature(userId);
+}
+
+// Paid or signed: the member's details are confirmed, so the chat never offers them "Start over" (it
+// would throw away what they paid for or signed). Never throws.
+async function isApplicationConfirmed(userId) {
+  if (await isApplicationSigned(userId)) return true;
+  try {
+    return await paymentService.hasSuccessfulPayment(userId);
+  } catch (err) {
+    logger.warn({ userId, err: err.message }, 'Could not check the payment before offering a restart');
+    return false;
+  }
+}
+
+// The payment step's reply. Shared by the live relay and the resume path, which both can land here.
+//   - Not paid yet: Typebot's own messages, then everything on file, above the Pay button.
+//   - Paid, signature still needed (review -> payment -> sign): the request to sign - the review was
+//     already seen before paying. withStepFlags() marks it signRequired, so the sign card shows.
 // Returns null when the review can't be built, so the caller shows the button as before.
 async function withPaymentReview({ userId, messages, input, extra = {} }) {
-  try {
-    const sections = await registrationReviewService.buildReview(userId);
-    // Only say what is known: "signed" needs a positive answer, a failed lookup says nothing.
-    let signNotice = [];
-    const state = await signatureState(userId);
-    if (state === SIGNATURE_STATE.REQUIRED) {
-      signNotice = [textMessage('esign-required', describeSignRequired(await signProviderFor(userId)))];
-    } else if (state === SIGNATURE_STATE.SIGNED) {
-      signNotice = [textMessage('esign-done', describeSignDone())];
-    }
-
+  if (await awaitingSignature(userId)) {
     return {
       sessionEnded: false,
       ...extra,
-      messages: [...messages, textMessage('payment-review', describeReview(sections)), ...signNotice],
+      messages: [...messages, textMessage('esign-required', describeSignRequired(await signProviderFor(userId)))],
+      input,
+      progress: resolveProgress(input.id),
+    };
+  }
+  try {
+    const sections = await registrationReviewService.buildReview(userId);
+    return {
+      sessionEnded: false,
+      ...extra,
+      messages: [...messages, textMessage('payment-review', describeReview(sections))],
       input,
       progress: resolveProgress(input.id),
     };
@@ -1009,12 +1031,12 @@ export async function handle(args) {
   return withStepFlags(args.userId, result);
 }
 
-// isPaymentStep, plus signRequired: on the payment step, the application still has to be e-signed
-// first (esignGate.js) - the frontend shows the sign card instead of the payment button.
+// isPaymentStep, plus signRequired: on the payment step, once the fee is paid, the application still
+// has to be e-signed (esignGate.js) - the frontend shows the sign card instead of the payment button.
 // signProvider tells the card how the member signs (EMSIGNER = Aadhaar OTP, DOCUSIGN = NRI).
 async function withStepFlags(userId, result) {
   const paymentStep = isPaymentStep(result.input?.id);
-  const signRequired = paymentStep ? await needsSignature(userId) : false;
+  const signRequired = paymentStep ? await awaitingSignature(userId) : false;
   const signProvider = signRequired ? await signProviderFor(userId) : null;
   return { ...result, isPaymentStep: paymentStep, signRequired, signProvider };
 }
@@ -1067,8 +1089,8 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
     // Only an explicit "start over" throws the progress away. Anything else - a stray tap, a typo,
     // a frontend that echoes something unexpected - resumes, because the destructive branch is the
     // one that must never be reached by accident.
-    // A member who has signed is never restarted either: their details are confirmed.
-    if (!choosesRestart(message) || (await isApplicationSigned(userId))) {
+    // A member who has paid or signed is never restarted either: their details are confirmed.
+    if (!choosesRestart(message) || (await isApplicationConfirmed(userId))) {
       return resumeFromJournal({ userId, token, carried: existing.carriedEmailVerification ?? null });
     }
 
@@ -1098,9 +1120,10 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   if (!existing && message === undefined && (!attachedFileUrls || attachedFileUrls.length === 0)) {
     const offer = await offerResume(userId, carried);
     if (offer) {
-      // Signed = confirmed: no "start over" for them, carry straight on (resumeFromJournal replaces
-      // the pending-choice session offerResume just stored).
-      if (await isApplicationSigned(userId)) return resumeFromJournal({ userId, token, carried });
+      // Paid or signed = confirmed: no "start over" for them, carry straight on (resumeFromJournal
+      // replaces the pending-choice session offerResume just stored). After the PayU return this
+      // lands them straight on the sign step.
+      if (await isApplicationConfirmed(userId)) return resumeFromJournal({ userId, token, carried });
       return offer;
     }
   }
@@ -1309,7 +1332,7 @@ async function handleCore({ userId, token, message, attachedFileUrls, relocalize
   // all for a member who had paid nothing. Hold them on the button instead.
   if (existing?.input && isPaymentStep(existing.input.id) && message !== undefined) {
     const paid = await paymentService.hasSuccessfulPayment(userId);
-    const unsigned = !paid && (await needsSignature(userId));
+    const unsigned = paid && (await needsSignature(userId));
     return {
       sessionEnded: false,
       messages: [
