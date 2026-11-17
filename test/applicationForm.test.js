@@ -197,32 +197,19 @@ test('the signature box sits on page 3, inside the page', () => {
   assert.equal(escapeHtml(`a"b'<`), 'a&quot;b&#39;&lt;');
 });
 
-// DocuSign drops a Sign Here tab on every occurrence of the anchor text, so a second invisible
-// "sign_here" on the Work Notification page is what gives an NRI member a signature there too.
+// Both providers sign twice: on the declaration and on the Work Notification page. DocuSign drops a
+// Sign Here tab on every occurrence of the anchor; eMudhra gets coordinates found from the same anchor.
 const anchorsIn = (html) => html.split(`<span class="anchor">${SIGNATURE_BOX.anchorText}</span>`).length - 1;
 
-test('an NRI form has the signature anchor on the declaration page and again above the work notification signer', async () => {
-  for (const regType of ['NI', 'NC']) {
+test('every form has the signature anchor on the declaration page and again above the work notification details', async () => {
+  for (const regType of ['I', 'C', 'NI', 'NC']) {
     account = { ...INDIVIDUAL, AccountRegType: regType };
     const data = await build();
-    assert.equal(data.signing.workPageSignature, true, regType);
-
     const html = renderApplicationForm(data);
     assert.equal(anchorsIn(html), 2, regType);
     // The second one belongs to PART 7's signer block, not the declaration.
     assert.ok(html.indexOf('PART 7') < html.lastIndexOf(`<span class="anchor">${SIGNATURE_BOX.anchorText}</span>`), regType);
-    // The DocuSign stamp prints the signer's name, so the typed name is not repeated beside it.
-    assert.equal(html.slice(html.indexOf('PART 7')).includes(`<p class="strong">${data.signing.signerName}</p>`), false, regType);
-  }
-});
-
-test('an Indian form keeps its single signature anchor, so eMudhra signing is unchanged', async () => {
-  for (const regType of ['I', 'C']) {
-    account = { ...INDIVIDUAL, AccountRegType: regType };
-    const data = await build();
-    assert.equal(data.signing.workPageSignature, false, regType);
-    const html = renderApplicationForm(data);
-    assert.equal(anchorsIn(html), 1, regType);
-    assert.ok(html.slice(html.indexOf('PART 7')).includes(`<p class="strong">${data.signing.signerName}</p>`), `${regType}: name stays`);
+    // The signature stamp prints the signer's name, so no typed name is repeated beside it.
+    assert.equal(html.slice(html.indexOf('PART 7')).includes(`<p class="strong">${data.fullName}</p>`), false, regType);
   }
 });

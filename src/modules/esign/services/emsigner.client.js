@@ -19,6 +19,12 @@ import { logger } from '../../../utils/logger.js';
 // emSigner's own signature modes; 12 is Aadhaar OTP eSign.
 export const MODE_OF_SIGNATURE_AADHAAR = '12';
 
+// Text emSigner's signing screen shows in an unsigned signature box (by default "To be signed by
+// <email>"). IPRS does not want that shown before signing; a blank label is sent in its place.
+// UNVERIFIED: emSigner's API reference lists `placeHolder` without saying what it changes - confirm
+// on UAT. The green box icon itself has no API setting that we know of.
+export const SIGNATURE_PLACEHOLDER = ' ';
+
 // Re-authorize this long before the token's own expiry, so a call never starts with a token that
 // runs out mid-request.
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
@@ -147,14 +153,15 @@ export class EmSignerClient {
   }
 
   /**
-   * Starts an Aadhaar eSign workflow for one signer.
+   * Starts an Aadhaar eSign workflow for one signer, signing at every box given (one OTP, one
+   * workflow - each box is another signature control assigned to the same signer).
    * @param {{ name: string, initiatorEmail: string, signerEmail: string, redirectUrl: string,
-   *   documentName: string, pdf: Buffer, signatureBox: { page: number, left: number, top: number,
-   *   width: number, height: number, pageHeight: number } }} input - the box in PDF points,
+   *   documentName: string, pdf: Buffer, signatureBoxes: Array<{ page: number, left: number, top: number,
+   *   width: number, height: number, pageHeight: number }> }} input - boxes in PDF points,
    *   measured from the page's top-left corner
    * @returns {Promise<{ workflowId: string, documentId: string|null, url: string, raw: object }>}
    */
-  async initiateSigning({ name, initiatorEmail, signerEmail, redirectUrl, documentName, pdf, signatureBox }) {
+  async initiateSigning({ name, initiatorEmail, signerEmail, redirectUrl, documentName, pdf, signatureBoxes }) {
     const json = await this.#post('/api/Public/InitiateEmbeddedSigning', {
       WorkflowType: 1,
       Name: name,
@@ -167,16 +174,15 @@ export class EmSignerClient {
         {
           DocumentName: documentName,
           FileData: pdf.toString('base64'),
-          ControlDetails: [
-            {
-              controlID: 4,
-              page: 'Specify',
-              pageNo: String(signatureBox.page),
-              ...toEmSignerControl(signatureBox),
-              assignedTo: 1,
-              SignerType: 1,
-            },
-          ],
+          ControlDetails: signatureBoxes.map((box) => ({
+            controlID: 4,
+            page: 'Specify',
+            pageNo: String(box.page),
+            ...toEmSignerControl(box),
+            assignedTo: 1,
+            SignerType: 1,
+            placeHolder: SIGNATURE_PLACEHOLDER,
+          })),
         },
       ],
     });
