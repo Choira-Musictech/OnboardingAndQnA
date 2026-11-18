@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 IPRS Platform Backend for an AI-powered onboarding & Q&A chatbot platform (musicians joining IPRS).
 
 **Implemented**: auth (OTP/JWT), user + registration modules, document upload with real OCR
-(`ocr.choira.io`) for PAN/Aadhaar/bank, and a backend-driven Typebot relay (`conversation` module):
-the frontend talks only to this backend, and this backend drives Typebot's own Chat API
-(`startChat`/`continueChat`) to run the onboarding conversation — Typebot is never called directly
-by the frontend. See `AGENTS.md`'s "Typebot Registration Flow" and "Conversation Router" sections
+(`ocr.choira.io`) for PAN/Aadhaar/bank, and the onboarding conversation (`conversation` module).
+The frontend talks only to this backend. The flow runs **inside this backend** (no Typebot server):
+`services/flow/flowEngine.js` runs the Typebot export committed at
+`src/modules/conversation/flow/registrationFlow.json`, with Typebot's ids and response shapes. See
+`AGENTS.md`'s "Built-in flow engine", "Typebot Registration Flow" and "Conversation Router" sections
 for the full architecture and API contracts; this file stays at the orientation level.
 
 **Still out of scope / later milestones**: the AI Q&A chatbot itself (RAG/vector DB/tool calling —
@@ -28,7 +29,7 @@ Note: `README.md` describes an earlier MySQL-based design; the project has since
 - **Helmet**, **CORS**, **express-rate-limit**, **multer** (memory storage, only on `POST /conversation/upload`)
 - **Pino / pino-http** logging
 - **bcryptjs**, **http-status-codes**, **dotenv**
-- Real external services: **`ocr.choira.io`** (PAN/Aadhaar/bank OCR), **`spotify.choira.in`** (role-labelled song credits for Spotify + YouTube work links), **Typebot Chat API** (`typebot.io` or self-hosted) — all via plain `fetch`, no SDK
+- Real external services: **`ocr.choira.io`** (PAN/Aadhaar/bank OCR), **`spotify.choira.in`** (role-labelled song credits for Spotify + YouTube work links) — all via plain `fetch`, no SDK. The onboarding flow itself has no external dependency (built-in flow engine).
 - Tests via **`node:test`**
 
 ## Commands
@@ -151,7 +152,7 @@ Always call `.parse` (not `.safeParse`); a thrown `ZodError` is caught by `async
 - Music credits: `MUSIC_CREDITS_API_BASE_URL` (default `https://spotify.choira.in`),
   `MUSIC_CREDITS_REQUEST_TIMEOUT_MS`, `MUSIC_CREDITS_ENABLED` (kill-switch) — the role-labelled
   credits source behind `Author_Composer`/`Author_Lyricist`, see AGENTS.md's "Music Credits Service".
-- Typebot: `TYPEBOT_API_BASE_URL`, `TYPEBOT_ID`, `TYPEBOT_PREVIEW_MODE` (test an unpublished bot via its internal id — see AGENTS.md), `TYPEBOT_API_TOKEN` (optional), `TYPEBOT_REQUEST_TIMEOUT_MS`, `MAX_UPLOAD_SIZE_MB`.
+- Chat uploads: `UPLOAD_DIR` (kept on this server), served at `DOCUMENT_LINK_BASE_URL/uploads/<token>/<file>` — so `DOCUMENT_LINK_BASE_URL` must be the API's public address (OCR downloads from it); `MAX_UPLOAD_SIZE_MB`.
 - Never commit real `.env` (git-ignored); keep `.env.example` in sync with any new key.
 
 ## Prisma
@@ -176,6 +177,6 @@ Always call `.parse` (not `.safeParse`); a thrown `ZodError` is caught by `async
 
 ## Conversation Router
 
-`modules/conversation/services/conversation.router.js` decides engine by `user.ApplicationStatus === 1` (→ `AIEngine`, still a Week 1 stub — leave it) vs everything else (→ `RegistrationEngine`, a real backend-driven relay to Typebot's Chat API).
+`modules/conversation/services/conversation.router.js` decides engine by `user.ApplicationStatus === 1` (→ `AIEngine`, still a Week 1 stub — leave it) vs everything else (→ `RegistrationEngine`, driving the built-in flow engine).
 
-`registrationEngine.js`'s `handle()` calls Typebot's `startChat` (new session) or `continueChat` (existing session, tracked in `typebotSessionStore.js`) and returns Typebot's response close to as-received. `handleUpload()` handles a raw file from `POST /conversation/upload`: gets a presigned URL from Typebot (`generateUploadUrl`), uploads the bytes, and — the key point — **saves the document itself** via `registrationService.saveDocument()` (same OCR + persistence as the registration module's own `/documents/:documentType` route) rather than relying on Typebot's Studio flow to call back into this API. Full detail, including the exact Typebot Chat API contract, is in AGENTS.md's "Typebot Registration Flow" and "Conversation Router" sections — read those before touching this module.
+`registrationEngine.js`'s `handle()` calls `typebotClient.startChat` (new session) or `continueChat` (existing session, tracked in `typebotSessionStore.js`) and returns the response close to as-received. `typebotClient.js` keeps its old name and methods, but now calls `services/flow/flowEngine.js` (the flow file) and `services/flow/uploadStorage.js` (files on this server) — no Typebot server. To change a question, edit `flow/registrationFlow.json` (or drop in a new Typebot export) and run `npm run build:progress-map`. `handleUpload()` handles a raw file from `POST /conversation/upload`: reserves a stored name (`generateUploadUrl`), writes the bytes, and — the key point — **saves the document itself** via `registrationService.saveDocument()` (same OCR + persistence as the registration module's own `/documents/:documentType` route) rather than relying on Typebot's Studio flow to call back into this API. Full detail, including the exact Typebot Chat API contract, is in AGENTS.md's "Typebot Registration Flow" and "Conversation Router" sections — read those before touching this module.

@@ -15,6 +15,7 @@
 // ==================================================================
 import crypto from 'node:crypto';
 import { env } from '../../../config/env.js';
+import { uploadStorage } from '../../conversation/services/flow/uploadStorage.js';
 
 // Signed with JWT_SECRET, so a link is exactly as trustworthy as a session
 // token and rotating the secret invalidates every link still in flight.
@@ -49,7 +50,8 @@ export function fileNameFor(doc) {
 
 export function buildDocumentUrl(doc, { now = Date.now() } = {}) {
   if (doc?.AccountDocId == null) return null;
-  if (!isFetchableDocumentUrl(doc.DocumentCaption)) return null;
+  // Kept on this server (chat uploads) or on an allow-listed host (older, Typebot-era uploads).
+  if (!uploadStorage.localPathForUrl(doc.DocumentCaption) && !isFetchableDocumentUrl(doc.DocumentCaption)) return null;
   const docId = String(doc.AccountDocId);
   const expiresAt = now + env.DOCUMENT_LINK_TTL_HOURS * 60 * 60 * 1000;
   const base = env.DOCUMENT_LINK_BASE_URL.replace(/\/+$/, '');

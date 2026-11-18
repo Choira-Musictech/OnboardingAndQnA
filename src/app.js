@@ -18,6 +18,7 @@ import spotifyRoutes from './modules/spotify/routes/spotify.routes.js';
 import paymentRoutes from './modules/payment/routes/payment.routes.js';
 import esignRoutes from './modules/esign/routes/esign.routes.js';
 import documentRoutes from './modules/documents/routes/document.routes.js';
+import uploadRoutes from './modules/uploads/routes/upload.routes.js';
 
 export const app = express();
 
@@ -49,6 +50,7 @@ app.use('/spotify', spotifyRoutes);
 app.use('/payment', paymentRoutes);
 app.use('/esign', esignRoutes);
 app.use('/documents', documentRoutes);
+app.use('/uploads', uploadRoutes);
 
 
 // --- 404 + central error handling (LAST) ---

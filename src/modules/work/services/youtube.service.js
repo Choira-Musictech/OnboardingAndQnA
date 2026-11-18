@@ -5,7 +5,8 @@
 // `grant_type=client_credentials` ("unsupported_grant_type") and the client id is not a valid API
 // key ("API_KEY_INVALID") - but a real YouTube Data API v3 key (env.YOUTUBE_API_KEY, optional) IS
 // now wired in, as a fallback description/publish-date source inside musicCredits.service.js's
-// fetchYoutubeCredits() - not here, since this file's own job stays the key-free path.
+// fetchYoutubeCredits(). Here it is only a fallback for public videos with embedding turned off,
+// which oEmbed refuses with a 401.
 //
 // oEmbed needs no key at all, answers in ~0.4s, and handles every URL form members paste
 // (watch?v=, youtu.be, /shorts/, music.youtube.com, and extra &list=/&index= params).
@@ -73,6 +74,13 @@ export async function fetchYoutubeVideo(value) {
     throw appError('YouTube is unreachable', { statusCode: 502, errorCode: 'YOUTUBE_UNREACHABLE', cause });
   }
 
+  // oEmbed answers 401/403 for a public video whose owner turned embedding off (verified live:
+  // BsEqI1NZA-E, public, embeddable:false). The Data API still has it, so ask that before giving up.
+  if ((response.status === 401 || response.status === 403) && env.YOUTUBE_API_KEY) {
+    const video = await fetchFromDataApi(videoId, watchUrl);
+    if (video) return video;
+  }
+
   if (!response.ok) {
     throw appError('That YouTube video could not be found', {
       statusCode: 404,
@@ -92,6 +100,30 @@ export async function fetchYoutubeVideo(value) {
     title: body.title,
     channelName: body.author_name ?? null,
     thumbnailUrl: body.thumbnail_url ?? null,
+  };
+}
+
+// The same fields from the YouTube Data API (env.YOUTUBE_API_KEY), or null when it has nothing.
+async function fetchFromDataApi(videoId, watchUrl) {
+  let response;
+  try {
+    response = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${env.YOUTUBE_API_KEY}`,
+      { signal: AbortSignal.timeout(env.YOUTUBE_REQUEST_TIMEOUT_MS) },
+    );
+  } catch {
+    return null;
+  }
+  if (!response.ok) return null;
+  const snippet = (await response.json().catch(() => null))?.items?.[0]?.snippet;
+  if (!snippet?.title) return null;
+  const thumbs = snippet.thumbnails ?? {};
+  return {
+    videoId,
+    url: watchUrl,
+    title: snippet.title,
+    channelName: snippet.channelTitle ?? null,
+    thumbnailUrl: (thumbs.high ?? thumbs.medium ?? thumbs.default)?.url ?? null,
   };
 }
 

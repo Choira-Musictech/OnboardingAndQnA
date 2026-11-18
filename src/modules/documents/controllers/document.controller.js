@@ -4,6 +4,7 @@
 // uploader's bucket directly, and why the link - not a bearer token - is the
 // credential here.
 // ==================================================================
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import { registrationRepository } from '../../registration/repositories/registration.repository.js';
 import {
@@ -13,6 +14,7 @@ import {
 } from '../services/documentLink.service.js';
 import { appError, notFoundError, unauthorizedError } from '../../../shared/errors.js';
 import { logger } from '../../../utils/logger.js';
+import { uploadStorage } from '../../conversation/services/flow/uploadStorage.js';
 
 // What a member actually uploads, and what a browser can render inline.
 // Anything else is still served, but as a download rather than as a document
@@ -27,11 +29,52 @@ const INLINE_TYPES = new Set([
 
 const UPSTREAM_TIMEOUT_MS = 20000;
 
+const TYPE_BY_EXTENSION = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.pdf': 'application/pdf',
+};
+
 // Quoted in Content-Disposition, so anything that could close the quote or the
 // header has to go. The UTF-8 copy in filename* carries the real name.
 function asciiFileName(name) {
   const cleaned = String(name).replace(/[^\w.\- ]+/g, '_').trim();
   return cleaned || 'document';
+}
+
+function setDocumentHeaders(res, { contentType, length, name }) {
+  const inline = INLINE_TYPES.has(contentType);
+  res.setHeader('Content-Type', inline ? contentType : 'application/octet-stream');
+  if (length) res.setHeader('Content-Length', String(length));
+  // helmet sets this to same-origin for the whole app, which would stop the
+  // chat - a different host on the same site - from rendering the document at all.
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader(
+    'Content-Disposition',
+    `${inline ? 'inline' : 'attachment'}; filename="${asciiFileName(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+  );
+}
+
+async function sendLocalDocument({ res, next, accountDocId, localPath, fileName, doc }) {
+  const token = path.basename(path.dirname(localPath));
+  const file = await uploadStorage.open(token, path.basename(localPath));
+  if (!file) return next(notFoundError('Document not found'));
+  const name = fileName ? decodeURIComponent(fileName) : fileNameFor(doc);
+  setDocumentHeaders(res, {
+    contentType: TYPE_BY_EXTENSION[path.extname(localPath).toLowerCase()] ?? '',
+    length: file.size,
+    name,
+  });
+  const body = file.stream();
+  body.on('error', (err) => {
+    logger.warn({ accountDocId, err }, 'Document stream failed mid-transfer');
+    res.destroy(err);
+  });
+  return body.pipe(res);
 }
 
 export async function streamDocument(req, res, next) {
@@ -51,7 +94,14 @@ export async function streamDocument(req, res, next) {
   } catch (err) {
     return next(err);
   }
-  if (!doc || !isFetchableDocumentUrl(doc.DocumentCaption)) {
+  if (!doc) return next(notFoundError('Document not found'));
+
+  // Uploaded in the chat and kept on this server (uploadStorage.js): read it from disk rather than
+  // fetching our own public link - which also works on a local http setup.
+  const localPath = uploadStorage.localPathForUrl(doc.DocumentCaption);
+  if (localPath) return sendLocalDocument({ res, next, accountDocId, localPath, fileName, doc });
+
+  if (!isFetchableDocumentUrl(doc.DocumentCaption)) {
     return next(notFoundError('Document not found'));
   }
 
@@ -72,20 +122,8 @@ export async function streamDocument(req, res, next) {
   }
 
   const contentType = (upstream.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-  const inline = INLINE_TYPES.has(contentType);
   const name = fileName ? decodeURIComponent(fileName) : fileNameFor(doc);
-
-  res.setHeader('Content-Type', inline ? contentType : 'application/octet-stream');
-  const length = upstream.headers.get('content-length');
-  if (length) res.setHeader('Content-Length', length);
-  // helmet sets this to same-origin for the whole app, which would stop the
-  // chat - a different host on the same site - from rendering the document at all.
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  res.setHeader('Cache-Control', 'private, max-age=3600');
-  res.setHeader(
-    'Content-Disposition',
-    `${inline ? 'inline' : 'attachment'}; filename="${asciiFileName(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`,
-  );
+  setDocumentHeaders(res, { contentType, length: upstream.headers.get('content-length'), name });
 
   const body = Readable.fromWeb(upstream.body);
   body.on('error', (err) => {

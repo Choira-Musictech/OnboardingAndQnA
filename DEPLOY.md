@@ -21,11 +21,11 @@ why this one runs on 4001.
 | --- | --- | --- |
 | SQL Server 2025 | `localhost:1433`, db `Dreamsoft_UAT` | Developer edition, same host |
 | OCR API | https://ocr.choira.io | `OCR_API_BASE_URL` |
-| Typebot viewer | https://bot.choira.io | `TYPEBOT_API_BASE_URL`, publicId `iprs-onboarding` |
+| Chat uploads | this server's disk | `UPLOAD_DIR` (outside the deploy folder), served at `DOCUMENT_LINK_BASE_URL/uploads/...` |
 
-`.env.example` in the repo root points `TYPEBOT_API_BASE_URL` at `typebot.io`.
-That is the public cloud instance; this deployment uses the self-hosted viewer,
-so the value must be `https://bot.choira.io`.
+The onboarding flow runs inside the API (built-in flow engine) — there is no Typebot server to
+deploy or configure any more. `DOCUMENT_LINK_BASE_URL` must be the API's public https address: the
+OCR service downloads uploaded documents from it.
 
 ## First-time setup
 

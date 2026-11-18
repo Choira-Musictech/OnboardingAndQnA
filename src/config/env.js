@@ -135,7 +135,7 @@ const envSchema = z.object({
   // Blanket kill-switch for OCR across every doc type (independent of OCR_DOC_TYPES in
   // registration.service.js) - flip to false when ocr.choira.io itself is flaky so chat-flow
   // testing can proceed past uploads without getting stuck in the "please re-upload" retry loop.
-  // z.coerce.boolean() would treat the string "false" as truthy - same fix as TYPEBOT_PREVIEW_MODE.
+  // z.coerce.boolean() would treat the string "false" as truthy - compare the string explicitly.
   OCR_ENABLED: z
     .string()
     .default('true')
@@ -157,16 +157,11 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v !== 'false'),
 
-  TYPEBOT_API_BASE_URL: z.string().default('https://typebot.io'),
-  // The bot's internal id (preview mode) or publicId (once published) - see TYPEBOT_PREVIEW_MODE.
-  TYPEBOT_ID: z.string().optional(),
-  // z.coerce.boolean() would treat the string "false" as truthy - compare explicitly instead.
-  TYPEBOT_PREVIEW_MODE: z
-    .string()
-    .default('false')
-    .transform((v) => v === 'true'),
-  TYPEBOT_API_TOKEN: z.string().optional(),
-  TYPEBOT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  /* The onboarding flow runs inside this backend (conversation/services/flow/flowEngine.js) - no
+     Typebot server. Chat uploads are kept here, under UPLOAD_DIR, and served back at
+     DOCUMENT_LINK_BASE_URL/uploads/<token>/<file> (conversation/services/flow/uploadStorage.js).
+     Keep it outside the deploy folder: a path inside the release directory is wiped on deploy. */
+  UPLOAD_DIR: z.string().default('uploads/files'),
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
   // The two folders every member's uploads are also copied to (see documentStorage.service.js):
   // photos as MPU_<AccountId>_<file>, documents as MRU_<AccountId>_<DocumentLookupId>_<file>.
