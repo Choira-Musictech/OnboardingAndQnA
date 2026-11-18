@@ -94,11 +94,8 @@ test('auth round-trip: send-otp -> verify-otp -> protected endpoint', async (t) 
   const regBody = await reg.json();
   assert.equal(regBody.data.completed, false);
 
-  // The registration engine now relays to a real Typebot bot via TYPEBOT_ID (preview mode or,
-  // once published, TYPEBOT_PREVIEW_MODE=false with the real publicId). If neither is configured
-  // the engine should fail gracefully (503 TYPEBOT_NOT_CONFIGURED) rather than crash - that's
-  // what's asserted here until a real TYPEBOT_ID is set, at which point this should assert a
-  // 200 with `engine: 'REGISTRATION'` instead.
+  // The onboarding flow runs inside the backend (flowEngine.js) - no external bot to configure, so a
+  // fresh member always gets the registration engine's first question.
   const conversation = await fetch(`${baseUrl}/conversation/message`, {
     method: 'POST',
     headers: {
@@ -107,15 +104,9 @@ test('auth round-trip: send-otp -> verify-otp -> protected endpoint', async (t) 
     },
     body: JSON.stringify({ message: 'hello' }),
   });
-  if (process.env.TYPEBOT_ID) {
-    assert.equal(conversation.status, 200);
-    const convBody = await conversation.json();
-    assert.equal(convBody.data.engine, 'REGISTRATION');
-  } else {
-    assert.equal(conversation.status, 503);
-    const convBody = await conversation.json();
-    assert.equal(convBody.error.code, 'TYPEBOT_NOT_CONFIGURED');
-  }
+  assert.equal(conversation.status, 200);
+  const convBody = await conversation.json();
+  assert.equal(convBody.data.engine, 'REGISTRATION');
 
   const logout = await fetch(`${baseUrl}/auth/logout`, {
     method: 'POST',

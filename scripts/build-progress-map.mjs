@@ -1,6 +1,6 @@
 // ==================================================================
 // Regenerates src/modules/conversation/services/typebot/progressMap.js
-// from the live published Typebot flow.
+// from the flow the backend runs (src/modules/conversation/flow/registrationFlow.json).
 //
 //   npm run build:progress-map
 //
@@ -9,20 +9,20 @@
 // (one role path, a `spotifyUrl` step no block uses) while the live flow
 // had grown to 131 questions across four paths, so resolveProgress()
 // returned null nearly everywhere. Hand-editing it would just start that
-// clock again. Run this after any republish instead.
-//
-// Needs TYPEBOT_ID (viewer) and TYPEBOT_API_TOKEN (builder) from .env.
+// clock again. Run this after any change to the flow file instead.
 // ==================================================================
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { env } from '../src/config/env.js';
 import {
   isPaymentStep,
   PAYMENT_BLOCK_IDS,
 } from '../src/modules/conversation/services/typebot/paymentBlockIds.js';
 
-const BUILDER_BASE = 'https://bot.builder.choira.io';
+const FLOW_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../src/modules/conversation/flow/registrationFlow.json',
+);
 const OUTPUT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../src/modules/conversation/services/typebot/progressMap.js',
@@ -36,30 +36,16 @@ function fail(message) {
   process.exit(1);
 }
 
-// --- fetch ----------------------------------------------------------------
+// --- load -----------------------------------------------------------------
 
-// The builder API only accepts the bot's *internal* id; startChat against the publicId is the only
-// way to learn it (see AGENTS.md).
-async function fetchPublishedFlow() {
-  if (!env.TYPEBOT_ID) fail('TYPEBOT_ID is not set in .env');
-  if (!env.TYPEBOT_API_TOKEN) fail('TYPEBOT_API_TOKEN is not set in .env (this is the *builder* token)');
-
-  const started = await fetch(`${env.TYPEBOT_API_BASE_URL}/api/v1/typebots/${env.TYPEBOT_ID}/startChat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prefilledVariables: {} }),
-  }).then((r) => r.json()).catch(() => null);
-
-  const internalId = started?.typebot?.id;
-  if (!internalId) fail(`Could not start a chat with TYPEBOT_ID="${env.TYPEBOT_ID}" - is it published?`);
-
-  const response = await fetch(`${BUILDER_BASE}/api/v1/typebots/${internalId}/publishedTypebot`, {
-    headers: { Authorization: `Bearer ${env.TYPEBOT_API_TOKEN}` },
-  });
-  if (!response.ok) fail(`Builder API returned ${response.status} - is TYPEBOT_API_TOKEN still valid?`);
-
-  const flow = (await response.json())?.publishedTypebot;
-  if (!flow?.groups?.length) fail('Builder API returned no groups');
+function loadFlowFile() {
+  let flow;
+  try {
+    flow = JSON.parse(fs.readFileSync(FLOW_FILE, 'utf8'));
+  } catch (err) {
+    fail(`Could not read ${FLOW_FILE}: ${err.message}`);
+  }
+  if (!flow?.groups?.length) fail('The flow file has no groups');
   return flow;
 }
 
@@ -302,7 +288,7 @@ export function resolveProgress(blockId) {
 
 // --- main -----------------------------------------------------------------
 
-const flow = await fetchPublishedFlow();
+const flow = loadFlowFile();
 const graph = buildGraph(flow);
 const computed = computeProgress(flow, graph);
 const stats = assertSane(flow, graph, computed);

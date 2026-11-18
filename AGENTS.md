@@ -38,7 +38,7 @@ npm run prisma:migrate   # prisma migrate dev
 npm run prisma:generate  # prisma generate
 npm run prisma:studio    # prisma studio
 npm run setup:db         # enable SQL Server TCP/SQL auth, create Dreamsoft_UAT + iprs_app login, write DATABASE_URL to .env
-npm run build:progress-map # regenerate progressMap.js from the live published Typebot flow - run after EVERY Studio republish
+npm run build:progress-map # regenerate progressMap.js from src/modules/conversation/flow/registrationFlow.json - run after every flow change
 ```
 
 Run a single test file directly with `node --test test/workMatch.test.js` (etc.).
@@ -155,8 +155,9 @@ Schemas are objects shaped `{ body?, query?, params? }`. Always call `.parse`; Z
   `MSG91_AUT_KEY`, `MSG91_TEMP_ID`, `MSG91_OTP_LENGTH`, `MSG91_OTP_EXPIRY`, plus global/auth rate-limit values.
 - OCR: `OCR_PROVIDER` (http|stub), `OCR_API_BASE_URL`, `OCR_REQUEST_TIMEOUT_MS`, `OCR_ENABLED` (blanket kill-switch,
   default true - flip to false when ocr.choira.io is flaky so chat-flow testing can pass uploads).
-- Typebot: `TYPEBOT_API_BASE_URL`, `TYPEBOT_ID`, `TYPEBOT_PREVIEW_MODE`, `TYPEBOT_API_TOKEN` (optional),
-  `TYPEBOT_REQUEST_TIMEOUT_MS`, `MAX_UPLOAD_SIZE_MB` (multer limit on `POST /conversation/upload`).
+- Flow and uploads (no Typebot settings any more): `UPLOAD_DIR` (where chat uploads are kept),
+  `DOCUMENT_LINK_BASE_URL` (the public address they are served at, which OCR downloads from),
+  `MAX_UPLOAD_SIZE_MB` (multer limit on `POST /conversation/upload`). See "Built-in flow engine".
 - Email/OTP: `EMAIL_OTP_LENGTH/EXPIRY_MINUTES/MAX_ATTEMPTS/RESEND_COOLDOWN_SECONDS`, `SMTP_HOST/PORT/SECURE/USER/PASSWORD`
   (see "Email OTP Verification"), `SUPPORT_CONTACT` (quoted to the member at the payment review when they report an error).
 - Work links / credits: `MUSIC_CREDITS_API_BASE_URL` (default `https://spotify.choira.in`), `MUSIC_CREDITS_ENABLED`
@@ -196,6 +197,45 @@ Schemas are objects shaped `{ body?, query?, params? }`. Always call `.parse`; Z
   `mockOtpProvider.js` (default, echoes OTP in dev) and `otpProvider.factory.js` selects by
   `OTP_PROVIDER`. For future third-party SMS: add `SmsOtpProvider`, flip env. Do not touch controllers/services.
 - **Token blacklist**: `modules/auth/services/tokenBlacklist.js` in-memory now; swap for Redis behind the same interface in a later milestone.
+
+## Built-in flow engine (no Typebot server)
+
+The onboarding questions no longer come from a Typebot server. The backend runs the flow itself:
+
+- **The flow:** `src/modules/conversation/flow/registrationFlow.json`, the Typebot export, run as-is.
+  It keeps the same block ids, variable ids, wording and buttons, so everything keyed by those ids
+  still works unchanged: the gates, the journal and resume, `progressMap.js`, `PAYMENT_BLOCK_IDS`,
+  the frontend and the tests.
+- **The engine:** `src/modules/conversation/services/flow/flowEngine.js` returns Typebot's Chat API
+  shapes (`{ sessionId, messages, input }`).
+  - It follows only `block.outgoingEdgeId` / `item.outgoingEdgeId`; the export carries stale
+    `edges[]` whose source block no longer exists.
+  - It skips Wait blocks.
+  - It answers a refused answer with the same input and `Invalid message. Please, try again.`, as
+    Typebot did. The engine reads "same input back" as a rejection.
+  - Sessions are in memory with a 12 h idle expiry. An unknown session throws 404 "Session not found."
+    (`isDeadSessionError`), so a restart falls back to the existing restart-and-resume-from-journal path.
+- **The seam:** `services/typebot/typebotClient.js` keeps its name and its four methods, so every
+  caller and test stub is unchanged. Only its insides moved to the engine and upload storage.
+- **Uploads:** `services/flow/uploadStorage.js` writes them to `UPLOAD_DIR/<128-bit token>/<file>`
+  and serves them at `DOCUMENT_LINK_BASE_URL/uploads/<token>/<file>` (public route, `modules/uploads`).
+  - That URL is saved in `App_Accounts_Doc.DocumentCaption` and sent to OCR, so in production
+    `DOCUMENT_LINK_BASE_URL` must be the API's public https address.
+  - The signed `/documents` route reads these files from disk.
+  - Older rows still hold Typebot S3 links, which stay readable through the allow-listed hosts.
+- **Changing the flow:** edit `registrationFlow.json`, or replace it with a fresh Typebot export.
+  Then run `npm run build:progress-map`.
+  - `test/flowEngine.test.js` walks every branch and fails if a path dead-ends, a question becomes
+    unreachable, or the flow ends anywhere but a Pay button.
+  - If a block or variable id the code relies on changes, update the maps keyed by it:
+    `paymentBlockIds.js`, `SAME_AS_ADDRESS_BLOCK_IDS`, `conversationFieldMap.js`,
+    `documentTypeMap.js`, `addressProofTypeMap.js`, and the gates' `variableId` checks.
+- **Not supported:** conditions, set-variable, webhooks and `{{variable}}` text. The current flow uses
+  none of them; add them to the engine before using them in the flow.
+
+Sections below that say "Typebot" describe the flow's behaviour and ids, which are unchanged. Where
+they mention Typebot's servers (bot.choira.io, the builder API, preview mode, S3, session expiry on
+their side), read them as history.
 
 ## Typebot Registration Flow
 
@@ -461,7 +501,9 @@ document from each `REQUIRED_DOC_GROUPS` group (see "Typebot Registration Flow" 
 `registration.service.js`'s `complete()`.
 
 - `modules/conversation/services/typebot/typebotClient.js` — `startChat`, `continueChat`,
-  `generateUploadUrl`, `uploadToPresignedUrl`. Plain `fetch` + timeout, mirrors
+  `generateUploadUrl`, `uploadToPresignedUrl`. **Now backed by the built-in flow engine and
+  upload storage (see "Built-in flow engine"); the rest of this paragraph is history.** It was
+  plain `fetch` + timeout, mirroring
   `modules/registration/services/ocr/httpOcrProvider.js`'s style exactly. Throws `appError`
   (`TYPEBOT_NOT_CONFIGURED`, 503) if `TYPEBOT_ID` is unset. `TYPEBOT_PREVIEW_MODE=true` makes
   `startChat` call Typebot's `.../typebots/{id}/preview/startChat` (internal id, no publish/paid
@@ -588,8 +630,8 @@ document from each `REQUIRED_DOC_GROUPS` group (see "Typebot Registration Flow" 
     loudly if progress would move backwards on any edge or a payment block is unresolvable. **Run
     it after every Studio republish** — the map went stale once in production precisely because no
     one regenerated it. Nothing in the map reaches 100 on purpose; `handle()` forces 100 when the
-    session actually ends. The script needs `TYPEBOT_ID` and `TYPEBOT_API_TOKEN` (the builder
-    token) from `.env`.
+    session actually ends. The script now reads the committed flow file
+    (`src/modules/conversation/flow/registrationFlow.json`); it needs no credentials.
   - **More gates in `handle()`**, all synthetic-block driven (Studio needs no changes), checked
     before the normal relay: the work-link loop (`workLinkGate.js`, see "Work links in the
     conversation flow") and the pre-payment review (`paymentGate.js`, "Payment review" below). The
