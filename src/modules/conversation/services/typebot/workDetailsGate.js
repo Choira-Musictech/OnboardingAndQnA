@@ -47,8 +47,6 @@ export const WORK_RELEASE_YEAR_INPUT = {
   options: { labels: { placeholder: 'e.g. 2023' } },
 };
 
-const CURRENT_YEAR = new Date().getFullYear();
-
 // Case/spacing-tolerant match against the five fixed options - a button tap always answers with the
 // exact label, but a member typing the answer (or a Studio re-render) might not match case exactly.
 export function parseWorkCategory(message) {
@@ -71,13 +69,13 @@ export function parseLanguageNames(message) {
   return clip(message, LIMITS.LanguageNames);
 }
 
-// A 4-digit year, not in the future beyond next year (a pre-release single dated for next year is
-// plausible; anything further is almost certainly a typo).
-export function parseReleaseYear(message) {
+// A 4-digit year, from 1900 up to this year - a song cannot have been released in the future. The
+// year is read on each call, so a server that stays up over New Year does not keep the old one.
+export function parseReleaseYear(message, now = new Date()) {
   const match = /^(\d{4})$/.exec(String(message ?? '').trim());
   if (!match) return null;
   const year = Number(match[1]);
-  return year >= 1900 && year <= CURRENT_YEAR + 1 ? year : null;
+  return year >= 1900 && year <= now.getFullYear() ? year : null;
 }
 
 // Freeform fields are asked from the member directly, so whatever they type is the authoritative
