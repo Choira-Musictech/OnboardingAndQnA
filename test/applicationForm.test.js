@@ -14,6 +14,7 @@ import {
   formatDate,
   formatDateTime,
   formatMobile,
+  plainDocumentName,
 } from '../src/modules/esign/services/applicationData.service.js';
 import { escapeHtml, renderApplicationForm, SIGNATURE_BOX } from '../src/modules/esign/templates/applicationForm.js';
 
@@ -182,6 +183,56 @@ test('the form has all five parts, the signature anchor, and escapes what the me
   assert.ok(html.includes('&lt;SCRIPT&gt;'), 'the alias is escaped');
   assert.ok(!html.includes('<script>alert'), 'no raw markup from member data');
   assert.ok(html.includes('href="https://youtu.be/BBAyRBTfsOU"'));
+});
+
+// The two IPRS Doc_LookUp names that carry an HTML link, as seen on the printed form.
+const DECLARATION_ROW =
+  "Self-Declaration of No Permanent Establishment and No Fixed Base situated in India and Beneficial Ownership of Royalty Income <a href='https://iprs.org/wp-content/uploads/2026/04/Declaration-Format.docx' target='_blank'>(Click Here to Download)</a>";
+const FORM_41_ROW =
+  'Form 41 User Manual – To be filed online and PDF copy to be uploaded <a href="https://iprs.org/wp-content/uploads/2026/04/10F-filling-Steps.pdf" target=\'_blank\'>(Steps to Fill Online)</a>';
+
+test('a document name that carries an HTML link is printed as the name only', () => {
+  assert.equal(
+    plainDocumentName(DECLARATION_ROW),
+    'Self-Declaration of No Permanent Establishment and No Fixed Base situated in India and Beneficial Ownership of Royalty Income',
+  );
+  assert.equal(plainDocumentName(FORM_41_ROW), 'Form 41 User Manual – To be filed online and PDF copy to be uploaded');
+});
+
+test('plain names are left as they are, and odd markup is cleaned', () => {
+  assert.equal(plainDocumentName('Identity Proof (Passport).'), 'Identity Proof (Passport).');
+  assert.equal(plainDocumentName('  Photo  '), 'Photo');
+  assert.equal(plainDocumentName('Bank Proof <a href="x\' target="_blank">(Download)</a> (Passbook)'), 'Bank Proof (Passbook)');
+  assert.equal(plainDocumentName('Current address proof <a href="https://x.example/a.pdf">'), 'Current address proof');
+  assert.equal(plainDocumentName('Tax <b>Identification</b> Number'), 'Tax Identification Number');
+  assert.equal(plainDocumentName('Photo&nbsp;(Passport size) &amp; ID'), 'Photo (Passport size) & ID');
+  assert.equal(plainDocumentName('Photo &lt;a href="x"&gt;(Download)&lt;/a&gt;'), 'Photo', 'a tag saved as entities is removed too');
+  assert.equal(plainDocumentName(null), '');
+  assert.equal(plainDocumentName('<a href="x">only a link</a>'), '');
+});
+
+test('the printed Document Info shows no link markup for those names', async () => {
+  documents = [
+    { DocumentName: 'DECLARATION', DocumentLookupId: 9n, DocumentCaption: 'https://files.example/declaration.pdf' },
+    { DocumentName: 'FORM_41', DocumentLookupId: 11n, DocumentCaption: 'https://files.example/form41.pdf' },
+  ];
+  esignRepository.findDocumentLookupNames = async () => new Map([['9', DECLARATION_ROW], ['11', FORM_41_ROW]]);
+
+  const data = await build();
+  assert.deepEqual(
+    data.documents.map((doc) => doc.name),
+    [
+      'Self-Declaration of No Permanent Establishment and No Fixed Base situated in India and Beneficial Ownership of Royalty Income',
+      'Form 41 User Manual – To be filed online and PDF copy to be uploaded',
+    ],
+  );
+  // The row still links to the member's own file, never to the IPRS template link.
+  assert.equal(data.documents[0].url, 'https://files.example/declaration.pdf');
+
+  const html = renderApplicationForm(data);
+  assert.ok(!html.includes('&lt;a'), 'no escaped <a tag in the page');
+  assert.ok(!html.includes('Click Here to Download'));
+  assert.ok(!html.includes('Declaration-Format.docx'));
 });
 
 test('only http(s) links become links', async () => {

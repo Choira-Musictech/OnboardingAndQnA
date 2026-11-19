@@ -45,6 +45,29 @@ function text(value) {
   return String(value).trim();
 }
 
+// IPRS's own Doc_LookUp.DocumentName is also used on their website, so a few rows carry an HTML link
+// ("... Royalty Income <a href='...docx' target='_blank'>(Click Here to Download)</a>"). The form is
+// printed as escaped text, so the tag showed up as written. Only the document's name belongs on the
+// form: the whole <a>...</a> goes (its link text is an instruction for a web page, not a name), and
+// so does any stray tag, such as an unclosed one. Quotes inside the tag may be mixed (href="..'), which
+// is why it is matched up to the closing ">" rather than by attribute.
+// Website text also carries HTML entities: a tag saved as &lt;a ...&gt; is turned back first so it is
+// removed like any other, and &nbsp; &amp; &quot; become their characters once the tags are gone,
+// before the template escapes the name again.
+export function plainDocumentName(value) {
+  return text(value)
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:#39|apos);/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const upper = (value) => text(value).toUpperCase();
 const orNA = (value) => text(value) || NA;
 
@@ -255,7 +278,7 @@ async function buildApplicationData(userId, { signedAt = new Date(), ip, guid, f
     works: works.map(describeWork),
     documents: documents.map((doc) => ({
       name:
-        text(lookupNames.get(String(doc.DocumentLookupId))) ||
+        plainDocumentName(lookupNames.get(String(doc.DocumentLookupId))) ||
         registrationReviewService.DOCUMENT_LABELS[doc.DocumentName] ||
         text(doc.DocumentName),
       url: text(doc.DocumentCaption),
