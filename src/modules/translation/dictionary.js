@@ -180,18 +180,45 @@ function bySentence(text, language) {
   return translatedAny ? out.join('') : null;
 }
 
+// Labels whose value is one of our own fixed options - a button the member tapped or a word the
+// backend writes (registrationReview.service.js's formatValue, workLinkGate.js's saved-song card) -
+// never something they typed. These values are translated too; every other value is left exactly as
+// it went in. Keyed by the English label, which is what the source text carries.
+const OPTION_VALUE_LABELS = new Set(['Applying as', 'Role', 'Entity type', 'Territory', 'Dual nationality', 'Category']);
+
+// A fixed option value in the member's language: the whole value, or else each comma-separated part
+// ("Composer, Lyricist"). A part with no entry keeps its English; null when nothing translated.
+function optionValue(value, language) {
+  const whole = wholeString(value.trim(), language);
+  if (whole) return whole;
+  if (!value.includes(',')) return null;
+  let translatedAny = false;
+  const parts = value.split(',').map((part) => {
+    const hit = wholeString(part.trim(), language);
+    if (!hit) return part.trim();
+    translatedAny = true;
+    return hit;
+  });
+  return translatedAny ? parts.join(', ') : null;
+}
+
 /**
  * "  Name: Nirnay Sawant" - the payment review and the resume summary are built
  * as label/value lines. The label is our wording and translates; the value is
- * the member's own data and must come back exactly as it went in. Only a label
- * the dictionary already knows is replaced, so a line that merely contains a
- * colon - a URL, a time - is left alone rather than guessed at.
+ * the member's own data and must come back exactly as it went in - except for
+ * the labels in OPTION_VALUE_LABELS, whose value is a fixed option we wrote
+ * ("Role: Publisher", "Category: Non Film") and is translated as well. Only a
+ * label the dictionary already knows is replaced, so a line that merely contains
+ * a colon - a URL, a time - is left alone rather than guessed at.
  */
 function labelledLine(text, language) {
   const parts = /^(\s*)([^:]{1,60}):[ \t](.*)$/.exec(text);
   if (!parts) return null;
-  const hit = wholeString(parts[2].trim(), language);
-  return hit ? `${parts[1]}${hit}: ${parts[3]}` : null;
+  const label = parts[2].trim();
+  const hit = wholeString(label, language);
+  if (!hit) return null;
+  const value = OPTION_VALUE_LABELS.has(label) ? (optionValue(parts[3], language) ?? parts[3]) : parts[3];
+  return `${parts[1]}${hit}: ${value}`;
 }
 
 /** "  - Electricity/Light Bill" - a bullet whose text is ours to translate. */
