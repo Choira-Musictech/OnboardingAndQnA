@@ -109,6 +109,34 @@ test('text, link and file questions check the answer', async () => {
   assert.notEqual((await ask(file, answerFor(file))).input?.id, file.id);
 });
 
+// The NRI Owner/Publisher path used to ask for the trader name straight after the company letter, with no
+// "do you release music under a stage name or alias?" before it, like the other three paths have.
+test('NRI Owner/Publisher is asked the stage name or alias question before the trader name', async () => {
+  const LETTER_UPLOAD = 'vbib8eovbot8wizsq2ixu9ie';
+  const TRADER_NAME_INPUT = 'xgpnjbhvc7ku42ks8asqyhd4';
+  const engine = createFlowEngine();
+  const afterLetter = async (answer) => {
+    const { sessionId } = await engine.startChat();
+    engine._sessions.get(sessionId).blockId = LETTER_UPLOAD;
+    const asked = await engine.continueChat({ sessionId, message: answerFor({ type: 'file input' }) });
+    return { sessionId, asked, answered: answer ? await engine.continueChat({ sessionId, message: { type: 'text', text: answer } }) : null };
+  };
+
+  const { asked } = await afterLetter(null);
+  assert.equal(asked.input.type, 'choice input');
+  assert.match(textOf(asked.messages.at(-1)), /do you release music under a stage name or alias\?/);
+  assert.deepEqual(asked.input.items.map((item) => item.content), ['Yes, I have an alias/stage name', 'No, just my name']);
+
+  const yes = (await afterLetter('Yes, I have an alias/stage name')).answered;
+  assert.match(textOf(yes.messages[0]), /You can enter multiple alias \/ trader names/);
+  assert.equal(yes.input.id, TRADER_NAME_INPUT);
+  assert.equal(yes.input.options.variableId, 'vknu81teyb5mr1zsrzggz6wzb', 'the answer is still saved as the trader name');
+
+  const no = (await afterLetter('No, just my name')).answered;
+  assert.match(textOf(no.messages[0]), /Please share a Spotify or YouTube link to your song/);
+  assert.equal(no.input.type, 'url input');
+});
+
 test('a session the engine does not know is a dead session, so the chat restarts and resumes', async () => {
   const engine = createFlowEngine();
   await assert.rejects(engine.continueChat({ sessionId: 'gone', message: { type: 'text', text: 'x' } }), (err) => isDeadSessionError(err));
