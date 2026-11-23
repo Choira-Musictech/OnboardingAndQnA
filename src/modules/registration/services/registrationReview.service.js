@@ -108,7 +108,9 @@ const DOCUMENT_LABELS = {
   TUM: 'Trade licence / Udyog Aadhaar / MSME certificate',
 };
 
-function formatValue(column, value) {
+const TERRITORY_BY_CODE = { 2136: 'WORLD', '0356': 'INDIA' };
+
+export function formatValue(column, value) {
   if (value === null || value === undefined) return null;
 
   if (column === 'DOB') {
@@ -126,6 +128,8 @@ function formatValue(column, value) {
   if (column === 'AccountRegType') return describeRegType(value);
   if (column === 'RollTypeIds') return describeRollTypeIds(value);
   if (column === 'EntityType') return describeEntityType(value);
+  // Also an IPRS code: registration.service.js stores WORLD as 2136 and INDIA as 0356.
+  if (column === 'TeritoryAppFor') return TERRITORY_BY_CODE[String(value).trim()] ?? (String(value).trim() || null);
 
   // AccountAlias may hold several comma-separated names (see registration.service.js's addAliases -
   // position 0 is the flow's own stage-name answer, later positions are names claimed later via
